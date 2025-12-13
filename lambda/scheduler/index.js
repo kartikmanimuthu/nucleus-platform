@@ -3,15 +3,13 @@ const moment = require('moment-timezone')
 const { v4: uuidv4 } = require('uuid');
 const pino = require('pino');
 
-
-
 // Environment Variables
-const DYNAMODB_TABLE = process.env.DYNAMODB_TABLE_NAME;
-const SCHEDULAR_NAME = process.env.SCHEDULAR_NAME;
+const APP_TABLE_NAME = process.env.APP_TABLE_NAME;
+const AUDIT_TABLE_NAME = process.env.AUDIT_TABLE_NAME;
+const SCHEDULER_NAME = process.env.SCHEDULAR_NAME; // Typos in original env var name preserved if needed, but safer maybe to use both? Original was SCHEDULAR_NAME
 const SCHEDULE_TAG = process.env.SCHEDULER_TAG;
 const AWS_REGION = process.env.AWS_DEFAULT_REGION
 const SNS_TOPIC_ARN = process.env.SNS_TOPIC_ARN
-
 
 const logger = pino({
     level: 'debug', // | info | debug
@@ -25,9 +23,7 @@ const logger = pino({
     },
 });
 
-
 let runId = null;
-
 
 exports.handler = async (event) => {
     runId = uuidv4();
@@ -40,26 +36,23 @@ exports.handler = async (event) => {
     }
 };
 
-
-
-
 async function fetchSchedulesMetaDataFromDynamoDb() {
-    const dynamoDB = new AWS.DynamoDB.DocumentClient({ region: AWS_REGION }); // Set region here
+    const dynamoDB = new AWS.DynamoDB.DocumentClient({ region: AWS_REGION });
 
+    // Use GSI1 to fetch all schedules
     const params = {
-        TableName: DYNAMODB_TABLE,
-        FilterExpression: '#type = :typeVal and active = :activeVal',
-        ExpressionAttributeNames: {
-            '#type': 'type',
-        },
+        TableName: APP_TABLE_NAME,
+        IndexName: 'GSI1',
+        KeyConditionExpression: 'gsi1pk = :typeVal',
+        FilterExpression: 'active = :activeVal',
         ExpressionAttributeValues: {
-            ':typeVal': 'schedule',
+            ':typeVal': 'TYPE#SCHEDULE',
             ':activeVal': true,
         },
     };
 
     try {
-        const data = await dynamoDB.scan(params).promise();
+        const data = await dynamoDB.query(params).promise();
         return data.Items;
     } catch (error) {
         logger.error('Error fetching schedules from DynamoDB:', error);
@@ -68,22 +61,22 @@ async function fetchSchedulesMetaDataFromDynamoDb() {
 }
 
 async function fetchAccountsMetaDataFromDynamoDb() {
-    const dynamoDB = new AWS.DynamoDB.DocumentClient({ region: AWS_REGION }); // Set region here
+    const dynamoDB = new AWS.DynamoDB.DocumentClient({ region: AWS_REGION });
 
+    // Use GSI1 to fetch all accounts
     const params = {
-        TableName: DYNAMODB_TABLE,
-        FilterExpression: '#type = :typeVal and active = :activeVal',
-        ExpressionAttributeNames: {
-            '#type': 'type',
-        },
+        TableName: APP_TABLE_NAME,
+        IndexName: 'GSI1',
+        KeyConditionExpression: 'gsi1pk = :typeVal',
+        FilterExpression: 'active = :activeVal',
         ExpressionAttributeValues: {
-            ':typeVal': 'account_metadata', // Adjusted for account metadata
+            ':typeVal': 'TYPE#ACCOUNT',
             ':activeVal': true,
         },
     };
 
     try {
-        const data = await dynamoDB.scan(params).promise();
+        const data = await dynamoDB.query(params).promise();
         return data.Items;
     } catch (error) {
         logger.error('Error fetching account metadata from DynamoDB:', error);
@@ -91,9 +84,52 @@ async function fetchAccountsMetaDataFromDynamoDb() {
     }
 }
 
+async function createAuditLog(entry) {
+    if (!AUDIT_TABLE_NAME) return;
+
+    const dynamoDB = new AWS.DynamoDB.DocumentClient({ region: AWS_REGION });
+    const id = uuidv4();
+    const timestamp = new Date().toISOString();
+    const expireAt = Math.floor(Date.now() / 1000) + (90 * 24 * 60 * 60);
+
+    const item = {
+        pk: `LOG#${id}`,
+        sk: timestamp,
+        gsi1pk: 'TYPE#LOG',
+        gsi1sk: timestamp,
+        expire_at: expireAt,
+        id: id,
+        timestamp: timestamp,
+        ...entry
+    };
+
+    try {
+        await dynamoDB.put({
+            TableName: AUDIT_TABLE_NAME,
+            Item: item
+        }).promise();
+    } catch (error) {
+        logger.error(`Failed to separate audit log: ${error.message}`);
+    }
+}
 
 async function startScheduler() {
     logger.info(`EXEC_ID: ${runId}`);
+
+    // Log start of execution
+    await createAuditLog({
+        type: 'audit_log',
+        eventType: 'scheduler.start',
+        action: 'start',
+        user: 'system',
+        userType: 'system',
+        resourceType: 'scheduler',
+        resourceId: runId,
+        status: 'info',
+        details: `Scheduler execution started: ${runId}`,
+        severity: 'info'
+    });
+
     const schedules = await fetchSchedulesMetaDataFromDynamoDb();
     const awsAccounts = await fetchAccountsMetaDataFromDynamoDb();
 
@@ -102,37 +138,72 @@ async function startScheduler() {
 
     // Process each account and its regions concurrently
     const accountPromises = awsAccounts.map(async (account) => {
-        const regionPromises = account.regions.map(async (region) => {
-            const stsTempCredentials = await assumeRoleAndSetConfig(account.accountId, region, account.roleArn);
-            const metadata = {
-                account: {
-                    name: account.name,
-                    accountId: account.accountId,
-                },
-                region: region,
-            };
+        // Handle case where regions might be a comma-separated string or array
+        let regions = account.regions;
+        if (typeof regions === 'string') {
+            regions = regions.split(',').map(r => r.trim());
+        } else if (!Array.isArray(regions)) {
+            regions = [];
+        }
 
-            // Call the scheduler functions
-            await Promise.all([
-                ec2Schedular(schedules, stsTempCredentials, metadata),
-                rdsSchedular(schedules, stsTempCredentials, metadata),
-                ecsSchedular(schedules, stsTempCredentials, metadata),
-            ]);
+        const regionPromises = regions.map(async (region) => {
+            try {
+                const stsTempCredentials = await assumeRoleAndSetConfig(account.accountId, region, account.roleArn);
+                const metadata = {
+                    account: {
+                        name: account.name,
+                        accountId: account.accountId,
+                    },
+                    region: region,
+                };
+
+                // Call the scheduler functions
+                await Promise.all([
+                    ec2Schedular(schedules, stsTempCredentials, metadata),
+                    rdsSchedular(schedules, stsTempCredentials, metadata),
+                    ecsSchedular(schedules, stsTempCredentials, metadata),
+                ]);
+            } catch (err) {
+                logger.error(`Error processing account ${account.name} in ${region}: ${err}`);
+                await createAuditLog({
+                    type: 'audit_log',
+                    eventType: 'scheduler.error',
+                    action: 'process_account',
+                    user: 'system',
+                    userType: 'system',
+                    resourceType: 'account',
+                    resourceId: account.accountId,
+                    status: 'error',
+                    details: `Error processing account ${account.name} in ${region}: ${err.message}`,
+                    severity: 'high',
+                    accountId: account.accountId,
+                    region: region
+                });
+            }
         });
 
         await Promise.all(regionPromises);
     });
 
     await Promise.all(accountPromises);
+
+    // Log completion
+    await createAuditLog({
+        type: 'audit_log',
+        eventType: 'scheduler.complete',
+        action: 'complete',
+        user: 'system',
+        userType: 'system',
+        resourceType: 'scheduler',
+        resourceId: runId,
+        status: 'success',
+        details: `Scheduler execution completed: ${runId}`,
+        severity: 'info'
+    });
 }
-
-
 
 async function assumeRoleAndSetConfig(accountId, region, roleArn) {
     const STS = new AWS.STS();
-    // const roleArn = `arn:aws:iam::${accountId}:role/YourCrossAccountRole`;
-    // const roleSessionName = `session-${accountId}`;
-
     const roleSessionName = `session-${accountId}-${region}`;
 
     logger.debug(`EXEC_ID: ${runId} - Assuming role ${roleArn} for account ${accountId}`);
@@ -142,16 +213,6 @@ async function assumeRoleAndSetConfig(accountId, region, roleArn) {
         RoleSessionName: roleSessionName,
     }).promise();
 
-
-    // AWS.config.update({
-    //     credentials: {
-    //         accessKeyId: assumedRole.Credentials.AccessKeyId,
-    //         secretAccessKey: assumedRole.Credentials.SecretAccessKey,
-    //         sessionToken: assumedRole.Credentials.SessionToken
-    //     },
-    //     region: region
-    // });
-
     return {
         credentials: {
             accessKeyId: assumedRole.Credentials.AccessKeyId,
@@ -160,9 +221,7 @@ async function assumeRoleAndSetConfig(accountId, region, roleArn) {
         },
         region: region
     };
-
 }
-
 
 async function sendErrorNotification(errorMessage) {
     const sns = new AWS.SNS();
@@ -179,7 +238,6 @@ async function sendErrorNotification(errorMessage) {
     }
 }
 
-
 async function elasticCacheSchedular() {
     // to be implemented 
 }
@@ -190,7 +248,6 @@ async function ec2Schedular(schedules, stsTempCredentials, metadata) {
         region: stsTempCredentials.region,
     });
     logger.info(`EXEC_ID: ${runId} - EC2 Scheduler started for ${metadata.account.name} (${metadata.account.accountId}) in ${metadata.region}`);
-    logger.info(`EXEC_ID: ${runId} - EC2 Schedular - Started - ${metadata.account.name} (${metadata.account.accountId}) in ${metadata.region}`);
 
     try {
         // Retrieve all EC2 instances
@@ -210,11 +267,23 @@ async function ec2Schedular(schedules, stsTempCredentials, metadata) {
         logger.info(`EXEC_ID: ${runId} - EC2 Schedular - Completed - ${metadata.account.name} (${metadata.account.accountId}) in ${metadata.region} `);
     } catch (error) {
         logger.error(`EXEC_ID: ${runId} - EC2 Schedular - Error - ${metadata.account.name} (${metadata.account.accountId}) in ${metadata.region} :`, error);
+        // Log to audit
+        await createAuditLog({
+            eventType: 'scheduler.ec2.error',
+            action: 'scan',
+            user: 'system', userType: 'system',
+            resourceType: 'ec2',
+            resourceId: metadata.account.accountId,
+            status: 'error',
+            details: `Error in EC2 Scheduler for ${metadata.account.name}: ${error.message}`,
+            severity: 'high',
+            accountId: metadata.account.accountId,
+            region: metadata.region
+        });
     }
 
 
     async function processEc2Instance(instance, schedules) {
-
         const scheduleTag = instance.Tags.find(tag => tag.Key === SCHEDULE_TAG);
         const schedule = schedules.find(s => s.name === scheduleTag.Value);
 
@@ -225,31 +294,59 @@ async function ec2Schedular(schedules, stsTempCredentials, metadata) {
 
         logger.debug(`EXEC_ID: ${runId} - EC2 Schedular - Processing instance "${instance.InstanceId}" with schedule "${scheduleTag.Value}"`);
 
-        if (isCurrentTimeInRange(schedule.starttime, schedule.endtime, schedule.timezone, schedule.days)) {
+        const inRange = isCurrentTimeInRange(schedule.starttime, schedule.endtime, schedule.timezone, schedule.days);
+
+        if (inRange) {
             if (instance.State.Name !== 'running') {
                 try {
                     await ec2AwsSdk.startInstances({ InstanceIds: [instance.InstanceId] }).promise();
                     logger.info(`EXEC_ID: ${runId}- EC2 Schedular - Started instance: ${instance.InstanceId}`);
+                    // Audit
+                    await createAuditLog({
+                        eventType: 'scheduler.ec2.start',
+                        action: 'start',
+                        user: 'system', userType: 'system',
+                        resourceType: 'ec2',
+                        resourceId: instance.InstanceId,
+                        status: 'success',
+                        details: `Started EC2 instance ${instance.InstanceId}`,
+                        severity: 'medium',
+                        accountId: metadata.account.accountId,
+                        region: metadata.region
+                    });
                 } catch (error) {
                     logger.error(`EXEC_ID: ${runId} - EC2 Schedular - Error starting instance ${instance.InstanceId}: ${error}`);
                 }
-
             } else {
-                logger.info(`EXEC_ID: ${runId} - EC2 Schedular - Instance "${instance.InstanceId}" is already at desired state running`);
+                logger.debug(`EXEC_ID: ${runId} - EC2 Schedular - Instance "${instance.InstanceId}" is already at desired state running`);
             }
         } else {
             if (instance.State.Name === 'running') {
-                await ec2AwsSdk.stopInstances({ InstanceIds: [instance.InstanceId] }).promise();
-                logger.info(`EXEC_ID: ${runId} - EC2 Schedular - Stopped instance: ${instance.InstanceId}`);
+                try {
+                    await ec2AwsSdk.stopInstances({ InstanceIds: [instance.InstanceId] }).promise();
+                    logger.info(`EXEC_ID: ${runId} - EC2 Schedular - Stopped instance: ${instance.InstanceId}`);
+                    // Audit
+                    await createAuditLog({
+                        eventType: 'scheduler.ec2.stop',
+                        action: 'stop',
+                        user: 'system', userType: 'system',
+                        resourceType: 'ec2',
+                        resourceId: instance.InstanceId,
+                        status: 'success',
+                        details: `Stopped EC2 instance ${instance.InstanceId}`,
+                        severity: 'medium',
+                        accountId: metadata.account.accountId,
+                        region: metadata.region
+                    });
+                } catch (error) {
+                    logger.error(`EXEC_ID: ${runId} - EC2 Schedular - Error stopping instance ${instance.InstanceId}: ${error}`);
+                }
             } else {
-                logger.info(`EXEC_ID: ${runId} - EC2 Schedular - Instance "${instance.InstanceId}" is already at desired state stopped`);
+                logger.debug(`EXEC_ID: ${runId} - EC2 Schedular - Instance "${instance.InstanceId}" is already at desired state stopped`);
             }
         }
     }
-
-
 }
-
 
 async function rdsSchedular(schedules, stsTempCredentials, metadata) {
     const rdsAwsSdk = new AWS.RDS({
@@ -257,7 +354,6 @@ async function rdsSchedular(schedules, stsTempCredentials, metadata) {
         region: stsTempCredentials.region,
     });
     logger.info(`EXEC_ID: ${runId} - RDS Scheduler started for ${metadata.account.name} (${metadata.account.accountId}) in ${metadata.region}`);
-    logger.info(`EXEC_ID: ${runId} - RDS Schedular - Started - ${metadata.account.name} (${metadata.account.accountId}) in ${metadata.region}`);
 
     try {
         const dbInstancesData = await rdsAwsSdk.describeDBInstances().promise();
@@ -265,10 +361,7 @@ async function rdsSchedular(schedules, stsTempCredentials, metadata) {
 
         logger.debug(`EXEC_ID: ${runId} - RDS Schedular - Found ${dbInstances.length} RDS instances for ${metadata.account.name} (${metadata.account.accountId}) in ${metadata.region}`);
 
-        // Create a list of promises for processing each RDS instance
         const dbInstanceProcessPromises = dbInstances.map(instance => processRDSInstance(instance, schedules));
-
-        // Process all RDS instances concurrently
         await Promise.all(dbInstanceProcessPromises);
 
         logger.info(`EXEC_ID: ${runId} - RDS Schedular - Completed - ${metadata.account.name} (${metadata.account.accountId}) in ${metadata.region}`);
@@ -278,7 +371,6 @@ async function rdsSchedular(schedules, stsTempCredentials, metadata) {
 
 
     async function processRDSInstance(instance, schedules) {
-
         try {
             const tagsData = await rdsAwsSdk.listTagsForResource({ ResourceName: instance.DBInstanceArn }).promise();
             const scheduleTag = tagsData.TagList.find(tag => tag.Key === SCHEDULE_TAG);
@@ -292,12 +384,24 @@ async function rdsSchedular(schedules, stsTempCredentials, metadata) {
                 return;
             }
 
-            logger.debug(`EXEC_ID: ${runId} - RDS Schedular - RDS instance "${instance.DBInstanceIdentifier}" is tagged with "${scheduleTag.Value}" schedule`);
+            const inRange = isCurrentTimeInRange(schedule.starttime, schedule.endtime, schedule.timezone, schedule.days);
 
-            if (isCurrentTimeInRange(schedule.starttime, schedule.endtime, schedule.timezone, schedule.days)) {
+            if (inRange) {
                 if (instance.DBInstanceStatus !== 'available') {
                     await rdsAwsSdk.startDBInstance({ DBInstanceIdentifier: instance.DBInstanceIdentifier }).promise();
                     logger.info(`EXEC_ID: ${runId} - RDS Schedular - RDS instance "${instance.DBInstanceIdentifier}" started`);
+                    await createAuditLog({
+                        eventType: 'scheduler.rds.start',
+                        action: 'start',
+                        user: 'system', userType: 'system',
+                        resourceType: 'rds',
+                        resourceId: instance.DBInstanceIdentifier,
+                        status: 'success',
+                        details: `Started RDS instance ${instance.DBInstanceIdentifier}`,
+                        severity: 'medium',
+                        accountId: metadata.account.accountId,
+                        region: metadata.region
+                    });
                 } else {
                     logger.info(`EXEC_ID: ${runId} - RDS Schedular - RDS instance "${instance.DBInstanceIdentifier}" is already at desired state running`);
                 }
@@ -305,6 +409,18 @@ async function rdsSchedular(schedules, stsTempCredentials, metadata) {
                 if (instance.DBInstanceStatus === 'available') {
                     await rdsAwsSdk.stopDBInstance({ DBInstanceIdentifier: instance.DBInstanceIdentifier }).promise();
                     logger.info(`EXEC_ID: ${runId} - RDS Schedular - RDS instance Stopped: ${instance.DBInstanceIdentifier}`);
+                    await createAuditLog({
+                        eventType: 'scheduler.rds.stop',
+                        action: 'stop',
+                        user: 'system', userType: 'system',
+                        resourceType: 'rds',
+                        resourceId: instance.DBInstanceIdentifier,
+                        status: 'success',
+                        details: `Stopped RDS instance ${instance.DBInstanceIdentifier}`,
+                        severity: 'medium',
+                        accountId: metadata.account.accountId,
+                        region: metadata.region
+                    });
                 } else {
                     logger.info(`EXEC_ID: ${runId} - RDS Schedular - RDS instance "${instance.DBInstanceIdentifier}" is already at desired state stopped`);
                 }
@@ -313,13 +429,7 @@ async function rdsSchedular(schedules, stsTempCredentials, metadata) {
             logger.error(`EXEC_ID: ${runId} - RDS Schedular - Error processing RDS instance ${instance.DBInstanceIdentifier}: ${error}`);
         }
     }
-
-
-
-
 }
-
-
 
 async function ecsSchedular(schedules, stsTempCredentials, metadata) {
     const ecsAwsSdk = new AWS.ECS({
@@ -331,18 +441,14 @@ async function ecsSchedular(schedules, stsTempCredentials, metadata) {
         region: stsTempCredentials.region,
     });
     logger.info(`EXEC_ID: ${runId} - ECS Scheduler started for ${metadata.account.name} (${metadata.account.accountId}) in ${metadata.region}`);
-    logger.info(`EXEC_ID: ${runId} - ECS Schedular - Started - ${metadata.account.name} (${metadata.account.accountId}) in ${metadata.region}`);
 
     try {
         const ecsClusters = await ecsAwsSdk.listClusters().promise();
         logger.debug(`EXEC_ID: ${runId} - ECS Schedular - Found ${ecsClusters.clusterArns.length} ECS Clusters`);
 
         const clusterUpdatePromises = ecsClusters.clusterArns.map(async clusterArn => {
-            logger.debug(`EXEC_ID: ${runId} - ECS Schedular - Processing ECS Cluster: ${clusterArn}`);
-
             const clusterDetails = await getEcsClusterDetails(clusterArn);
             if (!hasTag(clusterDetails.tags, SCHEDULE_TAG)) {
-                logger.debug(`EXEC_ID: ${runId} - ECS Schedular - No 'schedule' tag found for Cluster: ${clusterArn}, skipping`);
                 return;
             }
 
@@ -351,7 +457,6 @@ async function ecsSchedular(schedules, stsTempCredentials, metadata) {
             await ecsClusterScheduler(clusterArn, schedules);
         });
 
-        // Run updates for all clusters concurrently
         await Promise.all(clusterUpdatePromises);
         logger.info(`EXEC_ID: ${runId} - ECS Schedular - Completed - ${metadata.account.name} (${metadata.account.accountId}) in ${metadata.region}`);
     } catch (error) {
@@ -359,64 +464,35 @@ async function ecsSchedular(schedules, stsTempCredentials, metadata) {
     }
 
     async function ecsClusterScheduler(clusterArn, schedules) {
-        logger.info(`EXEC_ID: ${runId} - ECS Schedular - Starting ASG update for cluster: ${clusterArn}`);
-
         const asgNames = await getAllAsgNamesForEcsCluster(clusterArn);
-        logger.debug(`EXEC_ID: ${runId} - ECS Schedular - Found ${asgNames.length} ASGs for cluster: ${clusterArn}`);
-        if (!asgNames.length) {
-            logger.debug(`EXEC_ID: ${runId} - ECS Schedular - No ASGs found for cluster: ${clusterArn}`);
-            return;
-        }
+        if (!asgNames.length) return;
 
         const clusterDetails = await getEcsClusterDetails(clusterArn);
         const scheduleTagValue = getTagValue(clusterDetails.tags, SCHEDULE_TAG);
         const schedule = getScheduleDetails(schedules, scheduleTagValue);
 
-        if (!schedule) {
-            logger.debug(`EXEC_ID: ${runId} - ECS Schedular - No matching schedule found for cluster: ${clusterArn}`);
-            return;
-        }
+        if (!schedule) return;
 
         const desiredCapacity = isCurrentTimeInRange(schedule.starttime, schedule.endtime, schedule.timezone, schedule.days) ? 1 : 0;
-        logger.info(`EXEC_ID: ${runId} - ECS Schedular - Desired capacity for ASGs in cluster ${clusterArn}: ${desiredCapacity}`);
 
         const asgUpdatePromises = asgNames.map(asgName => updateAutoScalingGroupCount(asgName, desiredCapacity));
-
-        // Update all ASGs concurrently
         await Promise.all(asgUpdatePromises);
-        logger.debug(`EXEC_ID: ${runId} - ECS Schedular - Completed ASG updates for cluster: ${clusterArn}`);
     }
 
-
-
     async function ecsServiceScheduler(clusterArn, serviceArns, schedules) {
-        logger.info(`EXEC_ID: ${runId} - ECS Schedular - starting service updates in cluster: ${clusterArn}`);
-
         const serviceUpdatePromises = serviceArns.map(async serviceArn => {
             const serviceDetails = await getEcsServiceDetails(serviceArn);
-            if (!hasTag(serviceDetails.tags, SCHEDULE_TAG)) {
-                logger.debug(`EXEC_ID: ${runId} - ECS Schedular - Service ${serviceArn} does not have 'schedule' tag`);
-                return;
-            }
+            if (!hasTag(serviceDetails.tags, SCHEDULE_TAG)) return;
 
             const scheduleTagValue = getTagValue(serviceDetails.tags, SCHEDULE_TAG);
             const schedule = getScheduleDetails(schedules, scheduleTagValue);
-            if (!schedule) {
-                logger.debug(`EXEC_ID: ${runId} - ECS Schedular - No matching schedule found for service ${serviceArn}`);
-                return;
-            }
+            if (!schedule) return;
 
             const desiredCount = isCurrentTimeInRange(schedule.starttime, schedule.endtime, schedule.timezone, schedule.days) ? 1 : 0;
-            logger.debug(`EXEC_ID: ${runId} - ECS Schedular - Updating service ${serviceArn} to desired count: ${desiredCount}`);
             await updateEcsServiceCount(clusterArn, serviceArn, desiredCount, serviceDetails);
         });
-
-        // Update all services concurrently
         await Promise.all(serviceUpdatePromises);
-        logger.info(`EXEC_ID: ${runId} - ECS Schedular - Completed service updates in cluster: ${clusterArn}`);
     }
-
-
 
     // ========================== Helper Functions ==========================
 
@@ -429,26 +505,17 @@ async function ecsSchedular(schedules, stsTempCredentials, metadata) {
         return tags.some(tag => tag.key === lookupKey);
     }
 
-
     function getScheduleDetails(schedules, scheduleName) {
         return schedules.find(s => s.name === scheduleName);
     }
 
     async function getEcsClusterDetails(clusterArn) {
-
-
         try {
-            // Describe the cluster to get basic details
             const clusterDetails = await ecsAwsSdk.describeClusters({ clusters: [clusterArn] }).promise();
-
-            // Fetch tags separately
             const tagsResponse = await ecsAwsSdk.listTagsForResource({ resourceArn: clusterArn }).promise();
-            const tags = tagsResponse.tags;
-
-            // Combine the details and tags
             return {
                 ...clusterDetails.clusters[0],
-                tags: tags
+                tags: tagsResponse.tags
             };
         } catch (error) {
             logger.error(`Error getting ECS cluster details: ${error}`);
@@ -456,11 +523,7 @@ async function ecsSchedular(schedules, stsTempCredentials, metadata) {
         }
     }
 
-
-
     async function getEcsServiceDetails(serviceArn) {
-        logger.debug(`EXEC_ID: ${runId} - Getting ECS service details for ${serviceArn}`);
-
         try {
             const parts = serviceArn.split('/');
             const clusterName = parts[parts.length - 2];
@@ -472,12 +535,10 @@ async function ecsSchedular(schedules, stsTempCredentials, metadata) {
             }).promise();
 
             const tagsResponse = await ecsAwsSdk.listTagsForResource({ resourceArn: serviceArn }).promise();
-            const tags = tagsResponse.tags;
-
             return {
                 ...serviceDetails.services[0],
                 events: [],
-                tags: tags
+                tags: tagsResponse.tags
             };
         } catch (error) {
             logger.error(`EXEC_ID: ${runId} - Error getting ECS service details: ${error}`);
@@ -485,21 +546,13 @@ async function ecsSchedular(schedules, stsTempCredentials, metadata) {
         }
     }
 
-
     async function updateEcsServiceCount(clusterArn, serviceArn, desiredCount, currentServiceDetails) {
-        logger.debug(`EXEC_ID: ${runId} - Updating ECS service count for ${serviceArn}`);
-
         try {
             if (!currentServiceDetails) {
                 currentServiceDetails = await getEcsServiceDetails(serviceArn);
             }
-
             const currentDesiredCount = currentServiceDetails.desiredCount;
-
-            if (currentDesiredCount === desiredCount) {
-                logger.info(`EXEC_ID: ${runId} - ECS Schedular - Service "${serviceArn}" is already at desired count: ${desiredCount}`);
-                return;
-            }
+            if (currentDesiredCount === desiredCount) return;
 
             const serviceName = currentServiceDetails.serviceName;
             const params = {
@@ -509,27 +562,34 @@ async function ecsSchedular(schedules, stsTempCredentials, metadata) {
             };
             await ecsAwsSdk.updateService(params).promise();
             logger.info(`EXEC_ID: ${runId} - ECS Schedular - Updated service "${serviceName}" to desired count: ${desiredCount}`);
+            await createAuditLog({
+                eventType: 'scheduler.ecs.service.update',
+                action: 'update',
+                user: 'system', userType: 'system',
+                resourceType: 'ecs-service',
+                resourceId: serviceArn,
+                status: 'success',
+                details: `Updated ECS service ${serviceName} to count ${desiredCount}`,
+                severity: 'medium',
+                accountId: metadata.account.accountId,
+                region: metadata.region
+            });
         } catch (error) {
             logger.error(`EXEC_ID: ${runId} - ECS Schedular - Error updating service count for "${serviceArn}": ${error}`);
-            throw error;
         }
     }
 
-
     async function getAllAsgNamesForEcsCluster(clusterArn) {
-        logger.debug(`EXEC_ID: ${runId} - Getting ASG names for ECS cluster ${clusterArn}`);
-
         try {
             const clusterResponse = await ecsAwsSdk.describeClusters({ clusters: [clusterArn] }).promise();
             const capacityProviders = clusterResponse.clusters[0].capacityProviders;
+            if (!capacityProviders || capacityProviders.length === 0) return [];
 
             const capacityProvidersResponse = await ecsAwsSdk.describeCapacityProviders({ capacityProviders }).promise();
-
             const asgNames = capacityProvidersResponse.capacityProviders.map(provider => {
                 const asgArn = provider?.autoScalingGroupProvider?.autoScalingGroupArn;
                 return asgArn?.split('/')?.pop();
             }).filter(Boolean);
-
             return asgNames;
         } catch (error) {
             logger.error(`EXEC_ID: ${runId} - Error retrieving ASG names for ECS cluster: ${error}`);
@@ -538,24 +598,14 @@ async function ecsSchedular(schedules, stsTempCredentials, metadata) {
     }
 
     async function updateAutoScalingGroupCount(asgName, desiredCount) {
-        logger.debug(`EXEC_ID: ${runId} - Updating ASG count for ${asgName}`);
-
         try {
             const asgResponse = await asgAwsSdk.describeAutoScalingGroups({
                 AutoScalingGroupNames: [asgName]
             }).promise();
 
-            if (asgResponse.AutoScalingGroups.length === 0) {
-                logger.debug(`EXEC_ID: ${runId} - ASG "${asgName}" not found`);
-                return;
-            }
-
+            if (asgResponse.AutoScalingGroups.length === 0) return;
             const asg = asgResponse.AutoScalingGroups[0];
-
-            if (asg.DesiredCapacity === desiredCount) {
-                logger.debug(`EXEC_ID: ${runId} - ASG "${asgName}" is already at desired capacity: ${desiredCount}`);
-                return;
-            }
+            if (asg.DesiredCapacity === desiredCount) return;
 
             const params = {
                 AutoScalingGroupName: asgName,
@@ -564,16 +614,23 @@ async function ecsSchedular(schedules, stsTempCredentials, metadata) {
             };
             await asgAwsSdk.updateAutoScalingGroup(params).promise();
             logger.info(`EXEC_ID: ${runId} - Updated ASG "${asgName}" to desired capacity: ${desiredCount}`);
+            await createAuditLog({
+                eventType: 'scheduler.asg.update',
+                action: 'update',
+                user: 'system', userType: 'system',
+                resourceType: 'asg',
+                resourceId: asgName,
+                status: 'success',
+                details: `Updated ASG ${asgName} to count ${desiredCount}`,
+                severity: 'medium',
+                accountId: metadata.account.accountId,
+                region: metadata.region
+            });
         } catch (error) {
             logger.error(`EXEC_ID: ${runId} - Error updating ASG "${asgName}": ${error}`);
-            throw error;
         }
     }
-
-
-
 }
-
 
 function isCurrentTimeInRange(starttime, endtime, timezone, days) {
     const now = moment().tz(timezone);
@@ -584,14 +641,10 @@ function isCurrentTimeInRange(starttime, endtime, timezone, days) {
         return false;
     }
 
-    // Create start and end times using the current date to ensure proper comparison
+    // Create start and end times using the current date
     const currentDate = now.format('YYYY-MM-DD');
     const startTimeToday = moment.tz(`${currentDate} ${starttime}`, "YYYY-MM-DD HH:mm:ss", timezone);
     const endTimeToday = moment.tz(`${currentDate} ${endtime}`, "YYYY-MM-DD HH:mm:ss", timezone);
-
-    logger.debug(`Current Time: ${now.format()}`);
-    logger.debug(`Start Time: ${startTimeToday.format()}`);
-    logger.debug(`End Time: ${endTimeToday.format()}`);
 
     // Adjust for schedules that span over midnight
     if (endTimeToday.isBefore(startTimeToday)) {
@@ -600,4 +653,3 @@ function isCurrentTimeInRange(starttime, endtime, timezone, days) {
 
     return now.isBetween(startTimeToday, endTimeToday);
 }
-

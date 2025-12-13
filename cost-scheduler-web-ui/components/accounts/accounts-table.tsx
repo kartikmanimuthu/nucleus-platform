@@ -60,39 +60,32 @@ export function AccountsTable({
       setLoadingActions(accountId);
 
       // Implement actual validation by checking AWS credentials and permissions
-      const response = await fetch(`/api/accounts/${accountId}/validate`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+      const result = await ClientAccountService.validateAccount({
+          accountId: accountId,
+          region: 'us-east-1' // Default, service will pick up correct one
       });
 
-      if (response.ok) {
-        const result = await response.json();
-        if (result.valid) {
-          toast({
-            variant: "success",
-            title: "Connection Validated",
-            description: "Account connection is working properly.",
-          });
-        } else {
-          toast({
-            variant: "destructive",
-            title: "Validation Failed",
-            description: result.error || "Unable to validate account connection.",
-          });
-        }
+      if (result.isValid) {
+        toast({
+          variant: "success",
+          title: "Connection Validated",
+          description: "Account connection is working properly.",
+        });
       } else {
-        throw new Error('Validation request failed');
+        toast({
+          variant: "destructive",
+          title: "Validation Failed",
+          description: result.error || "Unable to validate account connection.",
+        });
       }
 
       onAccountUpdated?.();
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error validating connection:", error);
       toast({
         variant: "destructive",
         title: "Validation Failed",
-        description: "Failed to validate account connection.",
+        description: error.message || "Failed to validate account connection.",
       });
     } finally {
       setLoadingActions(null);

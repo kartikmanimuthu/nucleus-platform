@@ -27,7 +27,8 @@ ENV NEXT_SHARP_PATH=/tmp/node_modules/sharp
 
 # Set build-time environment variables for Next.js client-side access
 ENV NEXT_PUBLIC_AWS_REGION=ap-south-1
-ENV NEXT_PUBLIC_DYNAMODB_TABLE_NAME=cost-optimization-scheduler-table
+ENV NEXT_PUBLIC_APP_TABLE_NAME=NucleusAppTable
+ENV NEXT_PUBLIC_AUDIT_TABLE_NAME=NucleusAuditTable
 ENV NEXT_PUBLIC_AWS_USE_STS=true
 
 # Build the application
@@ -45,7 +46,8 @@ ENV PORT=8080 \
     NEXT_TELEMETRY_DISABLED=1 \
     NEXTAUTH_SECRET='iojifjifjfijffjijiehyudfytwfdtrdreswrsrxedctfvygbuhnjmk' \
     NEXT_PUBLIC_AWS_REGION=ap-south-1 \
-    NEXT_PUBLIC_DYNAMODB_TABLE_NAME=cost-optimization-scheduler-table \
+    NEXT_PUBLIC_APP_TABLE_NAME=NucleusAppTable \
+    NEXT_PUBLIC_AUDIT_TABLE_NAME=NucleusAuditTable \
     NEXT_PUBLIC_AWS_USE_STS=true \
     NEXT_PUBLIC_TESTING1='testing1'
 

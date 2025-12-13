@@ -3,10 +3,10 @@ import { AccountService } from '@/lib/account-service';
 
 export async function GET(
     request: NextRequest,
-    { params }: { params: { accountId: string } }
+    { params }: { params: Promise<{ accountId: string }> }
 ) {
     try {
-        const { accountId } = params;
+        const { accountId } = await params;
         console.log('API - GET /api/accounts/[accountId] - Fetching account:', accountId);
 
         const account = await AccountService.getAccount(accountId);
@@ -34,10 +34,10 @@ export async function GET(
 
 export async function PUT(
     request: NextRequest,
-    { params }: { params: { accountId: string } }
+    { params }: { params: Promise<{ accountId: string }> }
 ) {
     try {
-        const { accountId } = params;
+        const { accountId } = await params;
         console.log('API - PUT /api/accounts/[accountId] - Updating account:', accountId);
 
         const updateData = await request.json();
@@ -61,10 +61,10 @@ export async function PUT(
 
 export async function DELETE(
     request: NextRequest,
-    { params }: { params: { accountId: string } }
+    { params }: { params: Promise<{ accountId: string }> }
 ) {
     try {
-        const { accountId } = params;
+        const { accountId } = await params;
         console.log('API - DELETE /api/accounts/[accountId] - Deleting account:', accountId);
 
         await AccountService.deleteAccount(accountId);

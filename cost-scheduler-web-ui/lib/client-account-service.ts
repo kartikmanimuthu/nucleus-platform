@@ -11,7 +11,9 @@ export class ClientAccountService {
         statusFilter?: string;
         connectionFilter?: string;
         searchTerm?: string;
-    }): Promise<UIAccount[]> {
+        limit?: number;
+        nextToken?: string;
+    }): Promise<{ accounts: UIAccount[], nextToken?: string }> {
         try {
             console.log('ClientAccountService - Fetching accounts via API route', filters);
 
@@ -25,6 +27,12 @@ export class ClientAccountService {
             }
             if (filters?.searchTerm) {
                 params.append('search', filters.searchTerm);
+            }
+            if (filters?.limit) {
+                params.append('limit', filters.limit.toString());
+            }
+            if (filters?.nextToken) {
+                params.append('nextToken', filters.nextToken);
             }
 
             const url = params.toString() ? `${this.baseUrl}?${params.toString()}` : this.baseUrl;
@@ -46,7 +54,10 @@ export class ClientAccountService {
             }
 
             console.log('ClientAccountService - Successfully fetched accounts:', result.data.length);
-            return result.data;
+            return {
+                accounts: result.data,
+                nextToken: result.nextToken
+            };
         } catch (error) {
             console.error('ClientAccountService - Error fetching accounts:', error);
             throw error;
@@ -97,6 +108,7 @@ export class ClientAccountService {
         name: string;
         accountId: string;
         roleArn: string;
+        externalId?: string;
         regions: string[];
         active: boolean;
         description?: string;
@@ -214,12 +226,27 @@ export class ClientAccountService {
         try {
             console.log('ClientAccountService - Validating account via API route');
 
-            const response = await fetch(`${this.baseUrl}/validate`, {
+            let url = `${this.baseUrl}/${encodeURIComponent(accountData.accountId)}/validate`;
+            let body = {};
+
+            // If we have credentials, use the global validation endpoint (for Create/Edit forms with unsaved changes)
+            if (accountData.roleArn) {
+                console.log('ClientAccountService - Using Global Validation Endpoint with provided credentials');
+                url = `${this.baseUrl}/validate`; // /api/accounts/validate
+                body = {
+                    accountId: accountData.accountId,
+                    roleArn: accountData.roleArn,
+                    externalId: accountData.externalId,
+                    region: accountData.region
+                };
+            }
+
+            const response = await fetch(url, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify(accountData),
+                body: JSON.stringify(body),
             });
 
             const result = await response.json();

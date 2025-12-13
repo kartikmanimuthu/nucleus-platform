@@ -17,9 +17,7 @@ const nextConfig = {
     // Disable ESLint during builds to bypass compilation errors
     ignoreDuringBuilds: true,
   },
-  experimental: {
-    serverComponentsExternalPackages: ['aws-sdk'],
-  },
+  serverExternalPackages: ['aws-sdk'],
 };
 
 export default nextConfig;

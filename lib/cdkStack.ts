@@ -13,18 +13,13 @@ import * as crypto from 'crypto';
 import * as sns from 'aws-cdk-lib/aws-sns';
 import * as sns_subscriptions from 'aws-cdk-lib/aws-sns-subscriptions';
 
-
-
 export class CdkStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
-
     // *******************************************************************
     // Environment variables
     // *******************************************************************
-
-    // add tags also 
 
     const SCHEDULER_NAME = this.node.tryGetContext('scheduler').name;
     const SCHEDULE_INTERVAL = this.node.tryGetContext('scheduler').scheduleInterval;
@@ -36,21 +31,43 @@ export class CdkStack extends cdk.Stack {
     const SCHEDULE_EXPRESSION = this.generateScheduleExpression(SCHEDULE_INTERVAL);
 
     // *******************************************************************
-    // DynamoDB Table and Schedual Lambda
+    // DynamoDB Table and Scheduler Lambda
     // *******************************************************************
 
     const stackName = `${SCHEDULER_NAME}`;
-    // DynamoDB Table
-    const table = new dynamodb.Table(this, 'DynamoDbTable', {
-      partitionKey: { name: 'name', type: dynamodb.AttributeType.STRING },
-      sortKey: { name: 'type', type: dynamodb.AttributeType.STRING },
-      billingMode: dynamodb.BillingMode.PROVISIONED,
-      readCapacity: 1,
-      writeCapacity: 1,
-      tableName: `${stackName}-table`,
-      removalPolicy: RemovalPolicy.DESTROY, // Apply removal policy here
+
+    // 1. Nucleus App Table (Single Table Design)
+    const appTable = new dynamodb.Table(this, 'NucleusAppTable', {
+      partitionKey: { name: 'pk', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'sk', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      tableName: `${stackName}-app-table`,
+      removalPolicy: RemovalPolicy.DESTROY,
     });
 
+    // Add GSI1
+    appTable.addGlobalSecondaryIndex({
+      indexName: 'GSI1',
+      partitionKey: { name: 'gsi1pk', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'gsi1sk', type: dynamodb.AttributeType.STRING },
+    });
+
+    // 2. Nucleus Audit Table
+    const auditTable = new dynamodb.Table(this, 'NucleusAuditTable', {
+      partitionKey: { name: 'pk', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'sk', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      tableName: `${stackName}-audit-table`,
+      timeToLiveAttribute: 'expire_at',
+      removalPolicy: RemovalPolicy.DESTROY,
+    });
+
+    // Add GSI1 for Global/Recent logs
+    auditTable.addGlobalSecondaryIndex({
+      indexName: 'GSI1',
+      partitionKey: { name: 'gsi1pk', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'gsi1sk', type: dynamodb.AttributeType.STRING },
+    });
 
     // IAM Policy for Lambda
     const lambdaPolicy = new iam.Policy(this, 'LambdaPolicy', {
@@ -61,8 +78,17 @@ export class CdkStack extends cdk.Stack {
             "dynamodb:GetItem",
             "dynamodb:Scan",
             "dynamodb:Query",
+            "dynamodb:PutItem",
+            "dynamodb:UpdateItem",
+            "dynamodb:DeleteItem",
+            "dynamodb:BatchWriteItem"
           ],
-          resources: [table.tableArn],
+          resources: [
+            appTable.tableArn,
+            `${appTable.tableArn}/index/*`,
+            auditTable.tableArn,
+            `${auditTable.tableArn}/index/*`
+          ],
         }),
       ],
     });
@@ -93,6 +119,16 @@ export class CdkStack extends cdk.Stack {
     // Attach the assume role policy to the Lambda role
     lambdaRole.addToPolicy(assumeRolePolicy);
 
+    // Create an SNS Topic
+    const snsTopic = new sns.Topic(this, 'SchedulerSNSTopic', {
+      topicName: `${stackName}-sns-topic`,
+    });
+
+    // Add email subscriptions to the SNS topic
+    subscriptionEmails.forEach((email: string) => {
+      snsTopic.addSubscription(new sns_subscriptions.EmailSubscription(email));
+    });
+
     // Lambda Function
     const lambdaFunction = new lambda.Function(this, 'Lambda', {
       functionName: `${stackName}-function`,
@@ -100,9 +136,11 @@ export class CdkStack extends cdk.Stack {
       handler: 'index.handler',
       code: lambda.Code.fromAsset('lambda/scheduler'),
       environment: {
-        DYNAMODB_TABLE_NAME: table.tableName,
+        APP_TABLE_NAME: appTable.tableName,
+        AUDIT_TABLE_NAME: auditTable.tableName,
         CROSS_ACCOUNT_ROLE_ARN: lambdaRole.roleArn,
         SCHEDULER_TAG: SCHEDULER_TAG,
+        SNS_TOPIC_ARN: snsTopic.topicArn,
       },
       role: lambdaRole,
       timeout: cdk.Duration.minutes(15), // Set timeout to 15 minutes (maximum allowed)
@@ -121,12 +159,21 @@ export class CdkStack extends cdk.Stack {
     // Add Lambda function as the target of the rule
     rule.addTarget(new targets.LambdaFunction(lambdaFunction));
 
+    // Add SNS publish permissions to Lambda IAM policy
+    lambdaPolicy.addStatements(new iam.PolicyStatement({
+      actions: ['sns:Publish'],
+      resources: [snsTopic.topicArn],
+    }));
+
+    // Grant Lambda permission to publish to SNS topic
+    snsTopic.grantPublish(lambdaFunction);
+
 
     // *******************************************************************
-    // Insert Metadata Items into DynamoDB (Seeding)
+    // Seeder Logic - COMMENTED OUT FOR REFACTOR
     // *******************************************************************
 
-
+    /*
     // Load scheduler metadata from JSON files
     const schedulerMetadataPath = path.join(__dirname, "/../", 'scheduler_metadata.json');
     const accountMetadataPath = path.join(__dirname, "/../", 'account_metadata.json');
@@ -198,28 +245,7 @@ export class CdkStack extends cdk.Stack {
     customResourceRole.applyRemovalPolicy(RemovalPolicy.DESTROY);
 
     tableSeederFunction.grantInvoke(customResourceRole);
-
-    // Create an SNS Topic
-    const snsTopic = new sns.Topic(this, 'SchedulerSNSTopic', {
-      topicName: `${stackName}-sns-topic`,
-    });
-
-    // Add email subscriptions to the SNS topic
-    subscriptionEmails.forEach((email: string) => {
-      snsTopic.addSubscription(new sns_subscriptions.EmailSubscription(email));
-    });
-
-    // Add SNS topic ARN to Lambda environment variables
-    lambdaFunction.addEnvironment('SNS_TOPIC_ARN', snsTopic.topicArn);
-
-    // Grant Lambda permission to publish to SNS topic
-    snsTopic.grantPublish(lambdaFunction);
-
-    // Add SNS publish permissions to Lambda IAM policy
-    lambdaPolicy.addStatements(new iam.PolicyStatement({
-      actions: ['sns:Publish'],
-      resources: [snsTopic.topicArn],
-    }));
+    */
 
     // *******************************************************************
     // Outputs
@@ -236,9 +262,14 @@ export class CdkStack extends cdk.Stack {
       description: 'The ARN of the Lambda function'
     });
 
-    new cdk.CfnOutput(this, 'DynamoDBTableName', {
-      value: table.tableName,
-      description: 'The name of the DynamoDB table'
+    new cdk.CfnOutput(this, 'AppTableName', {
+      value: appTable.tableName,
+      description: 'The name of the App DynamoDB table'
+    });
+
+    new cdk.CfnOutput(this, 'AuditTableName', {
+      value: auditTable.tableName,
+      description: 'The name of the Audit DynamoDB table'
     });
 
     new cdk.CfnOutput(this, 'LambdaLogGroupName', {
@@ -266,17 +297,6 @@ export class CdkStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'StackName', {
       value: stackName,
       description: 'The unique stack name'
-    });
-
-    // Outputs for Table Seeder Lambda Function
-    new cdk.CfnOutput(this, 'TableSeeder', {
-      value: tableSeederFunction.functionName,
-      description: 'The name of the Table Seeder Lambda function'
-    });
-
-    new cdk.CfnOutput(this, 'TableSeederFunctionArn', {
-      value: tableSeederFunction.functionArn,
-      description: 'The ARN of the Table Seeder Lambda function'
     });
 
     // Output for Cross Account Role Name

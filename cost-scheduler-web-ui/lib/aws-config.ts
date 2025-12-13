@@ -4,8 +4,11 @@ import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
 
 // Get AWS configuration from environment variables (server-side)
-const region = process.env.AWS_REGION || process.env.AWS_REGION || 'ap-south-1';
-export const DYNAMODB_TABLE_NAME = process.env.DYNAMODB_TABLE_NAME || process.env.DYNAMODB_TABLE_NAME || 'cost-optimization-scheduler-table';
+const region = process.env.AWS_REGION || process.env.NEXT_PUBLIC_AWS_REGION || 'ap-south-1';
+export const APP_TABLE_NAME = process.env.APP_TABLE_NAME || process.env.NEXT_PUBLIC_APP_TABLE_NAME || 'cost-optimization-scheduler-app-table';
+export const AUDIT_TABLE_NAME = process.env.AUDIT_TABLE_NAME || process.env.NEXT_PUBLIC_AUDIT_TABLE_NAME || 'cost-optimization-scheduler-audit-table';
+// Legacy support
+export const DYNAMODB_TABLE_NAME = APP_TABLE_NAME;
 
 // Check if we're running in AWS Lambda environment
 const isLambdaEnvironment = () => {
@@ -65,29 +68,27 @@ const initializeAWSClients = () => {
     try {
         console.log('Starting AWS client initialization...');
         console.log('AWS Region:', region);
-        console.log('DynamoDB Table Name:', DYNAMODB_TABLE_NAME);
-        
+        console.log('App Table Name:', APP_TABLE_NAME);
+        console.log('Audit Table Name:', AUDIT_TABLE_NAME);
+
         // Check if we're in Lambda environment
         if (isLambdaEnvironment()) {
             // In Lambda, use the default credential provider chain
             console.log('Initializing AWS clients with default credential provider chain for Lambda');
-            
+
             // Log additional Lambda environment details
             console.log('Lambda Environment Details:');
             console.log('  - AWS_REGION:', process.env.AWS_REGION);
             console.log('  - AWS_DEFAULT_REGION:', process.env.AWS_DEFAULT_REGION);
             console.log('  - AWS_EXECUTION_ENV:', process.env.AWS_EXECUTION_ENV);
             console.log('  - AWS_LAMBDA_FUNCTION_NAME:', process.env.AWS_LAMBDA_FUNCTION_NAME);
-            console.log('  - AWS_LAMBDA_FUNCTION_VERSION:', process.env.AWS_LAMBDA_FUNCTION_VERSION);
-            console.log('  - AWS_LAMBDA_LOG_GROUP_NAME:', process.env.AWS_LAMBDA_LOG_GROUP_NAME);
-            console.log('  - AWS_LAMBDA_LOG_STREAM_NAME:', process.env.AWS_LAMBDA_LOG_STREAM_NAME);
-            
+
             dynamoDBClient = new DynamoDBClient({
                 region,
                 maxAttempts: 3,
                 retryMode: "adaptive"
             });
-            
+
             console.log('DynamoDB client created for Lambda environment');
         } else {
             // In local development, use environment variables
@@ -101,11 +102,11 @@ const initializeAWSClients = () => {
             });
             console.log('DynamoDB client created for local development');
         }
-        
+
         console.log('Creating DynamoDB Document Client from base client');
         dynamoDBDocumentClient = DynamoDBDocumentClient.from(dynamoDBClient);
         console.log('DynamoDB Document Client initialized successfully');
-        
+
         return dynamoDBDocumentClient;
     } catch (error: any) {
         console.error('Failed to initialize AWS clients:', error);
@@ -135,7 +136,7 @@ export function handleDynamoDBError(error: any, operation: string): void {
         statusCode: error?.$metadata?.httpStatusCode
     };
     console.error('Error details:', errorDetails);
-    
+
     // Log additional error information
     if (error?.$metadata) {
         console.error('Error metadata:', error.$metadata);
@@ -167,13 +168,11 @@ export async function testDynamoDBConnection(): Promise<boolean> {
     try {
         const client = getDynamoDBDocumentClient();
         console.log('DynamoDB client obtained successfully');
-        
+
         // Import the ListTablesCommand here to avoid importing it at the top level
-        // which might not be needed in all cases
         const { ListTablesCommand } = await import('@aws-sdk/client-dynamodb');
-        
+
         // Try to list tables to verify connection
-        // Note: This requires ListTables permission
         console.log('Attempting to list DynamoDB tables...');
         const command = new ListTablesCommand({});
         const response = await client.send(command);

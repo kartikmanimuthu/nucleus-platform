@@ -93,8 +93,12 @@ export default function AccountsClient({
     try {
       setLoading(true);
       setError(null);
-      const data = await ClientAccountService.getAccounts();
-      setAccounts(data);
+      const result = await ClientAccountService.getAccounts();
+      if (Array.isArray(result)) {
+           setAccounts(result);
+      } else {
+           setAccounts(result.accounts);
+      }
     } catch (err) {
       console.error("Error loading accounts:", err);
       setError(err instanceof Error ? err.message : "Failed to load accounts");
@@ -103,25 +107,64 @@ export default function AccountsClient({
     }
   };
 
+  // Pagination state
+  const [pageTokens, setPageTokens] = useState<(string | undefined)[]>([undefined]);
+  const [currentPage, setCurrentPage] = useState(0);
+  const [lastNextToken, setLastNextToken] = useState<string | undefined>(undefined);
+  const ITEMS_PER_PAGE = 10;
+
   // Load accounts with current filters
   const loadAccountsWithFilters = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
+      
+      const currentToken = pageTokens[currentPage];
+
       const filters = {
         statusFilter: statusFilter !== 'all' ? statusFilter : undefined,
         connectionFilter: connectionFilter !== 'all' ? connectionFilter : undefined,
-        searchTerm: searchTerm || undefined
+        searchTerm: searchTerm || undefined,
+        limit: ITEMS_PER_PAGE,
+        nextToken: currentToken
       };
-      const data = await ClientAccountService.getAccounts(filters);
-      setAccounts(data);
+      
+      const result = await ClientAccountService.getAccounts(filters);
+      
+      // Handle the new return type object
+      if (Array.isArray(result)) {
+          // Fallback if service returns array (shouldn't happen with updated service)
+          setAccounts(result);
+          setLastNextToken(undefined);
+      } else {
+          setAccounts(result.accounts);
+          setLastNextToken(result.nextToken);
+      }
+      
     } catch (err) {
       console.error("Error loading accounts:", err);
       setError(err instanceof Error ? err.message : "Failed to load accounts");
     } finally {
       setLoading(false);
     }
-  }, [statusFilter, connectionFilter, searchTerm]);
+  }, [statusFilter, connectionFilter, searchTerm, currentPage, pageTokens]); // Depend on currentPage and pageTokens
+
+  const handleNextPage = () => {
+      if (lastNextToken) {
+          const newTokens = [...pageTokens];
+          if (newTokens.length <= currentPage + 1) {
+              newTokens.push(lastNextToken);
+          }
+          setPageTokens(newTokens);
+          setCurrentPage(currentPage + 1);
+      }
+  };
+
+  const handlePreviousPage = () => {
+      if (currentPage > 0) {
+          setCurrentPage(currentPage - 1);
+      }
+  };
 
   // Handle account updates - this will be called by child components
   const handleAccountUpdated = (message?: string) => {
@@ -140,6 +183,12 @@ export default function AccountsClient({
 
   // Update URL and fetch data when filters change
   useEffect(() => {
+    // Reset pagination when filters change (except on initial load)
+    if (!isFirstRender) {
+        setCurrentPage(0);
+        setPageTokens([undefined]);
+    }
+
     // Build URL with current filters
     const url = new URL(window.location.href);
     
@@ -166,10 +215,33 @@ export default function AccountsClient({
     window.history.replaceState({}, '', url.toString());
     
     // Load accounts with new filters (skip on initial render if we already have initial data)
+    // Note: Since we reset currentPage to 0, and loadAccountsWithFilters depends on it, 
+    // we need to ensure we don't double trigger or miss trigger.
+    // Actually, setting currentPage(0) will trigger the effect below if we separate it?
+    // No, let's just call load explicitly here? 
+    // Better: Allow the useEffect dependency on currentPage to handle the load?
+    // Current dependency list of loadAccountsWithFilters includes currentPage.
+    // If we change searchTerm, we reset currentPage to 0.
+    // If currentPage was already 0, it won't trigger a change.
+    // So we should call loadAccountsWithFilters() here explicitly to be safe, 
+    // OR ensure that [searchTerm, ...] change triggers it.
+    
     if (!isFirstRender) {
-      loadAccountsWithFilters();
+       // We need to wait for state update? No, just call with default token (undefined)
+       // actually, the cleaner way is to separate filter change effect from load effect?
+       // Let's keep it simple: Call load directly.
+       
+       // BUT, the useCallback depends on pageTokens. If we just called setPageTokens, it's not updated yet in closure.
+       // So we can't call loadAccountsWithFilters immediately if it relies on state.
     }
-  }, [searchTerm, statusFilter, connectionFilter, loadAccountsWithFilters, isFirstRender]);
+  }, [searchTerm, statusFilter, connectionFilter, isFirstRender]); 
+  
+  // Separate effect to trigger load when pagination or filters change
+  useEffect(() => {
+      if (!isFirstRender) {
+        loadAccountsWithFilters();
+      }
+  }, [loadAccountsWithFilters, isFirstRender]);
 
 
 
@@ -446,6 +518,31 @@ export default function AccountsClient({
             />
           </TabsContent>
         </Tabs>
+      )}
+
+      {/* Pagination Controls */}
+      {!loading && (currentPage > 0 || lastNextToken) && (
+        <div className="flex items-center justify-end space-x-2 py-4">
+            <Button
+                variant="outline"
+                size="sm"
+                onClick={handlePreviousPage}
+                disabled={currentPage === 0}
+            >
+                Previous
+            </Button>
+            <div className="text-sm text-muted-foreground">
+                Page {currentPage + 1}
+            </div>
+            <Button
+                variant="outline"
+                size="sm"
+                onClick={handleNextPage}
+                disabled={!lastNextToken}
+            >
+                Next
+            </Button>
+        </div>
       )}
 
       {/* Dialogs */}

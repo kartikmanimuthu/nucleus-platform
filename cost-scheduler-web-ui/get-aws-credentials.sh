@@ -59,6 +59,7 @@ fi
 
 echo ""
 echo "🔧 Make sure your .env.local file has the correct table name:"
-echo "NEXT_PUBLIC_DYNAMODB_TABLE_NAME=cost-optimization-scheduler-table"
+echo "NEXT_PUBLIC_APP_TABLE_NAME=NucleusAppTable"
+echo "NEXT_PUBLIC_AUDIT_TABLE_NAME=NucleusAuditTable"
 echo ""
 echo "📊 You can find the actual table name from your CDK deployment outputs."

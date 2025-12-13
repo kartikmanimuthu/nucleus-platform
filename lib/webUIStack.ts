@@ -27,14 +27,17 @@ export class WebUIStack extends cdk.Stack {
         // Context and Configuration
         const SCHEDULER_NAME = this.node.tryGetContext('scheduler')?.name || 'cost-scheduler';
         const stackName = `${SCHEDULER_NAME}-web-ui`;
-        const customDomainConfig = this.node.tryGetContext('customDomain'); // Updated context key
-        const schedulerTableName = this.node.tryGetContext('schedulerTableName') || 'cost-optimization-scheduler-table';
+        const customDomainConfig = this.node.tryGetContext('customDomain');
+
+        // New Table Names
+        const appTableName = `${SCHEDULER_NAME}-app-table`;
+        const auditTableName = `${SCHEDULER_NAME}-audit-table`;
 
         // ============================================================================
         // DYNAMODB TABLES
         // ============================================================================
 
-        // Create DynamoDB table for users-teams
+        // Create DynamoDB table for users-teams (Keeping this as it might be used by the UI template still)
         const usersTeamsTable = new dynamodb.Table(this, 'UsersTeamsTable', {
             tableName: `${stackName}-users-teams`,
             partitionKey: {
@@ -114,7 +117,7 @@ export class WebUIStack extends cdk.Stack {
             })
         );
 
-        // Add DynamoDB permissions for scheduler table
+        // Add DynamoDB permissions for Nucleus App and Audit tables
         webUILambdaExecutionRole.addToPolicy(
             new iam.PolicyStatement({
                 effect: iam.Effect.ALLOW,
@@ -124,12 +127,14 @@ export class WebUIStack extends cdk.Stack {
                     "dynamodb:Query",
                     "dynamodb:PutItem",
                     "dynamodb:UpdateItem",
-                    "dynamodb:DeleteItem"
+                    "dynamodb:DeleteItem",
+                    "dynamodb:BatchWriteItem"
                 ],
                 resources: [
-                    `arn:aws:dynamodb:${this.region}:${this.account}:table/${schedulerTableName}`,
-                    `arn:aws:dynamodb:${this.region}:${this.account}:table/${schedulerTableName}/index/*`,
-                    `arn:aws:dynamodb:${this.region}:${this.account}:table/${SCHEDULER_NAME}-table`,
+                    `arn:aws:dynamodb:${this.region}:${this.account}:table/${appTableName}`,
+                    `arn:aws:dynamodb:${this.region}:${this.account}:table/${appTableName}/index/*`,
+                    `arn:aws:dynamodb:${this.region}:${this.account}:table/${auditTableName}`,
+                    `arn:aws:dynamodb:${this.region}:${this.account}:table/${auditTableName}/index/*`,
                 ],
             })
         );
@@ -215,8 +220,6 @@ export class WebUIStack extends cdk.Stack {
         });
 
         // Determine the application URL
-        // If custom domain is enabled, use it. Otherwise, use the fallback domain if provided, or default to localhost.
-        // Using a fallback domain (e.g. valid CloudFront URL) breaks the circular dependency.
         let appUrl = 'http://localhost:3000';
         if (customDomainConfig?.enableCustomDomain && customDomainConfig?.domainName) {
             appUrl = `https://${customDomainConfig.domainName}`;
@@ -321,8 +324,8 @@ export class WebUIStack extends cdk.Stack {
             resources: [
                 usersTeamsTable.tableArn,
                 `${usersTeamsTable.tableArn}/index/*`,
-                `arn:aws:dynamodb:${this.region}:${this.account}:table/${schedulerTableName}`,
-                `arn:aws:dynamodb:${this.region}:${this.account}:table/${SCHEDULER_NAME}-table`,
+                `arn:aws:dynamodb:${this.region}:${this.account}:table/${appTableName}`,
+                `arn:aws:dynamodb:${this.region}:${this.account}:table/${appTableName}/index/*`,
             ],
         }));
 
@@ -384,8 +387,10 @@ export class WebUIStack extends cdk.Stack {
                 // AWS Configuration
                 NEXT_PUBLIC_AWS_REGION: this.region,
                 // DynamoDB Configuration
-                DYNAMODB_TABLE_NAME: schedulerTableName,
-                NEXT_PUBLIC_DYNAMODB_TABLE_NAME: schedulerTableName,
+                APP_TABLE_NAME: appTableName,
+                NEXT_PUBLIC_APP_TABLE_NAME: appTableName,
+                AUDIT_TABLE_NAME: auditTableName,
+                NEXT_PUBLIC_AUDIT_TABLE_NAME: auditTableName,
                 DYNAMODB_USERS_TEAMS_TABLE: usersTeamsTable.tableName,
                 // Cognito Configuration for NextAuth
                 COGNITO_USER_POOL_ID: this.userPool.userPoolId,
@@ -454,11 +459,9 @@ export class WebUIStack extends cdk.Stack {
         // CLOUDFRONT DISTRIBUTION
         // ============================================================================
 
-        // Create CloudFront distribution with conditional custom domain
         let distribution: cloudfront.Distribution;
 
         if (customDomainConfig?.enableCustomDomain && customDomainConfig?.domainName && customDomainConfig?.certificateArn) {
-            // Custom domain enabled
             distribution = new cloudfront.Distribution(this, 'WebUICustomDomain', {
                 domainNames: [customDomainConfig.domainName],
                 certificate: acm.Certificate.fromCertificateArn(this, 'WebUICustomDomainCertificate', customDomainConfig.certificateArn),
@@ -472,7 +475,6 @@ export class WebUIStack extends cdk.Stack {
                 priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
             });
         } else {
-            // Default CloudFront domain
             distribution = new cloudfront.Distribution(this, 'WebUIDistribution', {
                 defaultBehavior: {
                     origin: new origins.FunctionUrlOrigin(lambdaFunctionUrl),
@@ -552,6 +554,17 @@ export class WebUIStack extends cdk.Stack {
         new cdk.CfnOutput(this, 'UsersTeamsTableName', {
             value: usersTeamsTable.tableName,
             description: 'DynamoDB Table Name for Users and Teams',
+        });
+
+        // Output new tables
+        new cdk.CfnOutput(this, 'AppTableName', {
+            value: appTableName,
+            description: 'Nucleus App Table Name',
+        });
+
+        new cdk.CfnOutput(this, 'AuditTableName', {
+            value: auditTableName,
+            description: 'Nucleus Audit Table Name',
         });
     }
 }

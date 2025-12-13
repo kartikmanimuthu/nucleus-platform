@@ -3,23 +3,37 @@ import { AccountService } from '@/lib/account-service';
 
 export async function POST(request: NextRequest) {
     try {
-        console.log('API - POST /api/accounts/validate - Validating account');
+        const body = await request.json();
+        const { roleArn, externalId, region, accountId } = body;
 
-        const accountData = await request.json();
-        console.log('API - Validation data:', accountData);
+        console.log(`API - Validating credentials for ${roleArn} (ExternalID: ${externalId ? 'Provided' : 'None'})`);
 
-        const result = await AccountService.validateAccount(accountData);
+        if (!roleArn || !region) {
+            return NextResponse.json({
+                success: false,
+                error: 'Missing required parameters: roleArn, region'
+            }, { status: 400 });
+        }
 
-        console.log('API - Account validation result:', result);
+        // Use the new validateCredentials method
+        const result = await AccountService.validateCredentials({
+            roleArn,
+            externalId,
+            region
+        });
+
         return NextResponse.json({
             success: true,
-            data: result
+            data: {
+                isValid: result.isValid,
+                error: result.error
+            }
         });
     } catch (error) {
-        console.error('API - Error validating account:', error);
+        console.error('API - Error validating credentials:', error);
         return NextResponse.json({
             success: false,
-            error: error instanceof Error ? error.message : 'Failed to validate account'
+            error: error instanceof Error ? error.message : 'Failed to validate credentials'
         }, { status: 500 });
     }
 }

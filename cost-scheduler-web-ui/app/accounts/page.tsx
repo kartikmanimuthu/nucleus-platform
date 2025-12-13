@@ -27,7 +27,7 @@ export default async function AccountsPage({ searchParams}: { searchParams: Sear
   const connectionFilter = typeof searchParams.connection === 'string' ? searchParams.connection : 'all';
   const searchTerm = typeof searchParams.search === 'string' ? searchParams.search : '';
   // Fetch filtered accounts from DynamoDB on the server side
-  const accounts = await getAccounts({
+  const { accounts } = await getAccounts({
     statusFilter,
     connectionFilter,
     searchTerm
@@ -53,12 +53,12 @@ async function getAccounts(filters?: {
   statusFilter?: string;
   connectionFilter?: string;
   searchTerm?: string;
-}): Promise<UIAccount[]> {
+}): Promise<{ accounts: UIAccount[], nextToken?: string }> {
   try {
-    const accounts = await AccountService.getAccounts(filters);
-    return accounts;
+    const result = await AccountService.getAccounts(filters);
+    return result;
   } catch (error) {
     console.error('Server-side: Error loading accounts from DynamoDB:', error);
-    return [];
+    return { accounts: [] };
   }
 }

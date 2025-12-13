@@ -1,22 +1,19 @@
 // DynamoDB service for account metadata operations
-import { ScanCommand, PutCommand, DeleteCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
-import { getDynamoDBDocumentClient, DYNAMODB_TABLE_NAME, handleDynamoDBError } from './aws-config';
+import { ScanCommand, PutCommand, DeleteCommand, UpdateCommand, QueryCommand, GetCommand } from '@aws-sdk/lib-dynamodb';
+import { getDynamoDBDocumentClient, APP_TABLE_NAME, handleDynamoDBError } from './aws-config';
 import { AccountMetadata, UIAccount } from './types';
 import { AuditService } from './audit-service';
+import { STSClient, AssumeRoleCommand } from '@aws-sdk/client-sts';
+import { ECSClient, ListClustersCommand } from '@aws-sdk/client-ecs';
+import { RDSClient, DescribeDBInstancesCommand } from '@aws-sdk/client-rds';
 
 // Define handleDynamoDBError if it's not properly imported
 const handleError = (error: any, operation: string) => {
     console.error(`AccountService - Error during ${operation}:`, error);
-    console.error('Error details:', {
-        name: error.name,
-        message: error.message,
-        code: error.code,
-        statusCode: error.$metadata?.httpStatusCode
-    });
 
     // Re-throw with a more user-friendly message
     if (error.name === 'ConditionalCheckFailedException') {
-        throw new Error('Account with this name already exists');
+        throw new Error('Account with this ID already exists');
     } else if (error.name === 'ValidationException') {
         throw new Error(`Validation error: ${error.message}`);
     } else {
@@ -32,86 +29,68 @@ export class AccountService {
         statusFilter?: string;
         connectionFilter?: string;
         searchTerm?: string;
-    }): Promise<UIAccount[]> {
+        limit?: number;
+        nextToken?: string;
+    }): Promise<{ accounts: UIAccount[], nextToken?: string }> {
         try {
             console.log('AccountService - Attempting to fetch accounts from DynamoDB', filters ? `with filters: ${JSON.stringify(filters)}` : '');
-            // Build filter expression based on provided filters
-            let filterExpression = '#type = :typeVal';
-            const expressionAttributeNames = { '#type': 'type' };
-            const expressionAttributeValues: Record<string, any> = { ':typeVal': 'account_metadata' };
-            
-            // Add status filter if provided and not 'all'
-            if (filters?.statusFilter && filters.statusFilter !== 'all') {
-                const isActive = filters.statusFilter === 'active';
-                filterExpression += ' AND active = :activeVal';
-                expressionAttributeValues[':activeVal'] = isActive;
+
+            const limit = filters?.limit || 50;
+            let exclusiveStartKey;
+
+            if (filters?.nextToken) {
+                try {
+                    exclusiveStartKey = JSON.parse(Buffer.from(filters.nextToken, 'base64').toString('utf-8'));
+                } catch (e) {
+                    console.error('Invalid nextToken:', e);
+                }
             }
-            
-            // Add connection filter if provided and not 'all'
-            if (filters?.connectionFilter && filters.connectionFilter !== 'all' && 
-                filters.connectionFilter !== 'connected' && filters.connectionFilter !== 'inactive') {
-                filterExpression += ' AND connectionStatus = :connVal';
-                expressionAttributeValues[':connVal'] = filters.connectionFilter;
-            }
-            
-            // Note: Text search is more complex in DynamoDB, we'll do that post-query
-            
-            const command = new ScanCommand({
-                TableName: DYNAMODB_TABLE_NAME,
-                FilterExpression: filterExpression,
-                ExpressionAttributeNames: expressionAttributeNames,
-                ExpressionAttributeValues: expressionAttributeValues,
+
+            const command = new QueryCommand({
+                TableName: APP_TABLE_NAME,
+                IndexName: 'GSI1',
+                KeyConditionExpression: 'gsi1pk = :pkVal',
+                ExpressionAttributeValues: {
+                    ':pkVal': 'TYPE#ACCOUNT',
+                },
+                Limit: limit,
+                ExclusiveStartKey: exclusiveStartKey,
             });
 
             const response = await getDynamoDBDocumentClient().send(command);
             console.log('AccountService - Successfully fetched accounts:', response.Items?.length || 0);
 
-            let accounts = (response.Items || []).map(item => this.transformToUIAccount(item as AccountMetadata));
-            
-            // Apply text search filter in memory if provided
+            let accounts = (response.Items || []).map(item => this.transformToUIAccount(item));
+
             if (filters?.searchTerm && filters.searchTerm.trim() !== '') {
                 const searchTerm = filters.searchTerm.toLowerCase();
-                accounts = accounts.filter(account => 
+                accounts = accounts.filter(account =>
                     account.name.toLowerCase().includes(searchTerm) ||
                     account.accountId.toLowerCase().includes(searchTerm) ||
                     (account.description && account.description.toLowerCase().includes(searchTerm)) ||
                     (account.createdBy && account.createdBy.toLowerCase().includes(searchTerm))
                 );
-                console.log(`AccountService - Applied text search filter, found ${accounts.length} matching accounts`);
-            }
-            
-            // Apply connection filter for connected/inactive which is derived from active status
-            if (filters?.connectionFilter && 
-                (filters.connectionFilter === 'connected' || filters.connectionFilter === 'inactive')) {
-                const shouldBeActive = filters.connectionFilter === 'connected';
-                accounts = accounts.filter(account => account.active === shouldBeActive);
-                console.log(`AccountService - Applied connection filter (${filters.connectionFilter}), found ${accounts.length} matching accounts`);
             }
 
-            // Remove duplicates based on accountId (keep the most recently updated one)
-            const uniqueAccounts = accounts.reduce((acc, current) => {
-                const existing = acc.find(item => item.accountId === current.accountId);
-                if (!existing) {
-                    acc.push(current);
-                } else {
-                    // Keep the one with the more recent updatedAt timestamp
-                    if (current.updatedAt && existing.updatedAt && new Date(current.updatedAt) > new Date(existing.updatedAt)) {
-                        const index = acc.indexOf(existing);
-                        acc[index] = current;
-                    }
+            if (filters?.statusFilter && filters.statusFilter !== 'all') {
+                const isActive = filters.statusFilter === 'active';
+                accounts = accounts.filter(account => account.active === isActive);
+            }
+
+            if (filters?.connectionFilter && filters.connectionFilter !== 'all') {
+                if (filters.connectionFilter === 'connected') {
+                    accounts = accounts.filter(account => account.connectionStatus === 'connected');
                 }
-                return acc;
-            }, [] as UIAccount[]);
+            }
 
-            return uniqueAccounts;
+            let nextToken: string | undefined = undefined;
+            if (response.LastEvaluatedKey) {
+                nextToken = Buffer.from(JSON.stringify(response.LastEvaluatedKey)).toString('base64');
+            }
+
+            return { accounts, nextToken };
         } catch (error: any) {
             console.error('AccountService - Error fetching accounts:', error);
-            console.error('Error details:', {
-                name: error.name,
-                message: error.message,
-                code: error.code,
-                statusCode: error.$metadata?.httpStatusCode
-            });
             throw new Error('Failed to fetch accounts from database');
         }
     }
@@ -121,29 +100,21 @@ export class AccountService {
      */
     static async getAccount(accountId: string): Promise<UIAccount | null> {
         try {
-            // Since DynamoDB uses name field as partition key, we need to scan to find accounts by accountId
-            // This is not efficient for large datasets but works for our use case
-            const command = new ScanCommand({
-                TableName: DYNAMODB_TABLE_NAME,
-                FilterExpression: '#type = :typeVal AND accountId = :accountIdVal',
-                ExpressionAttributeNames: {
-                    '#type': 'type',
-                },
-                ExpressionAttributeValues: {
-                    ':typeVal': 'account_metadata',
-                    ':accountIdVal': accountId,
-                },
+            // Get Item using Primary Key (PK, SK)
+            const command = new GetCommand({
+                TableName: APP_TABLE_NAME,
+                Key: {
+                    pk: `ACCOUNT#${accountId}`,
+                    sk: 'METADATA'
+                }
             });
 
             const response = await getDynamoDBDocumentClient().send(command);
-            const items = response.Items || [];
-
-            if (items.length === 0) {
+            if (!response.Item) {
                 return null;
             }
 
-            // Should only be one account with this accountId
-            return this.transformToUIAccount(items[0] as AccountMetadata);
+            return this.transformToUIAccount(response.Item);
         } catch (error) {
             console.error('Error fetching account:', error);
             throw new Error('Failed to fetch account from database');
@@ -156,28 +127,33 @@ export class AccountService {
     static async createAccount(account: Omit<UIAccount, 'id'>): Promise<UIAccount> {
         try {
             const now = new Date().toISOString();
-            const dbAccount: AccountMetadata & { name: string } = {
-                name: account.name, // Use account name as partition key
-                type: 'account_metadata', // Sort key
-                accountId: account.accountId,
-                roleArn: account.roleArn,
+
+            const dbItem = {
+                pk: `ACCOUNT#${account.accountId}`,
+                sk: 'METADATA',
+                gsi1pk: 'TYPE#ACCOUNT',
+                gsi1sk: account.name, // Sort by name
+
+                // Attributes
+                account_id: account.accountId, // Persist explicity
+                account_name: account.name,
+                role_arn: account.roleArn,
+                external_id: account.externalId, // Persist externalId
                 regions: account.regions,
                 active: account.active,
                 description: account.description,
-                createdAt: now,
-                updatedAt: now,
-                createdBy: account.createdBy || 'system',
-                updatedBy: account.updatedBy || 'system',
+                connection_status: 'unknown',
+                created_at: now,
+                updated_at: now,
+                created_by: account.createdBy || 'system',
+                updated_by: account.updatedBy || 'system',
+                type: 'account', // Helper attribute
             };
 
             const command = new PutCommand({
-                TableName: DYNAMODB_TABLE_NAME,
-                Item: dbAccount,
-                ConditionExpression: 'attribute_not_exists(#name) AND attribute_not_exists(#type)',
-                ExpressionAttributeNames: {
-                    '#name': 'name',
-                    '#type': 'type'
-                }
+                TableName: APP_TABLE_NAME,
+                Item: dbItem,
+                ConditionExpression: 'attribute_not_exists(pk)',
             });
 
             await getDynamoDBDocumentClient().send(command);
@@ -191,20 +167,17 @@ export class AccountService {
                 user: account.createdBy || 'system',
                 userType: 'user',
                 status: 'success',
-                details: `Created AWS account "${account.name}" (${account.accountId}) with role ${account.roleArn}`,
+                details: `Created AWS account "${account.name}" (${account.accountId})`,
                 metadata: {
                     accountId: account.accountId,
                     roleArn: account.roleArn,
-                    regions: account.regions,
-                    active: account.active,
                 },
             });
 
-            return this.transformToUIAccount(dbAccount);
+            return this.transformToUIAccount(dbItem);
         } catch (error) {
             console.error('Error creating account:', error);
-
-            // Log failed audit event
+            // Log failed audit event 
             await AuditService.logUserAction({
                 action: 'Create Account',
                 resourceType: 'account',
@@ -213,11 +186,9 @@ export class AccountService {
                 user: account.createdBy || 'system',
                 userType: 'user',
                 status: 'error',
-                details: `Failed to create AWS account "${account.name}" (${account.accountId}): ${(error as any).message}`,
+                details: `Failed to create AWS account "${account.name}" (${account.accountId})`,
                 metadata: { error: (error as any).message },
             });
-
-            // This throws an error so execution won't continue past this point
             throw handleError(error, 'create account');
         }
     }
@@ -227,52 +198,56 @@ export class AccountService {
      */
     static async updateAccount(accountId: string, updates: Partial<Omit<UIAccount, 'id' | 'accountId'>>): Promise<UIAccount> {
         try {
-            // First, get the current account to find the correct name (partition key)
-            const currentAccount = await this.getAccount(accountId);
-            if (!currentAccount) {
-                throw new Error('Account not found');
-            }
-
             const now = new Date().toISOString();
 
-            // Build update expression dynamically
+            // Build update expression
             const updateExpressions: string[] = [];
             const expressionAttributeNames: Record<string, string> = {};
             const expressionAttributeValues: Record<string, any> = {};
 
+            // Map UI fields to DB fields
+            const fieldMapping: Record<string, string> = {
+                name: 'account_name',
+                roleArn: 'role_arn',
+                externalId: 'external_id',
+                active: 'active',
+                description: 'description',
+                connectionStatus: 'connection_status',
+                updatedBy: 'updated_by',
+                regions: 'regions',
+                lastValidated: 'updated_at' // Hack for validation update
+            };
+
             Object.entries(updates).forEach(([key, value]) => {
-                // Skip updating the name if it's the same as current name (since it's the partition key)
-                // Also skip id and accountId as usual
+                const dbField = fieldMapping[key] || key;
                 if (value !== undefined && key !== 'id' && key !== 'accountId') {
-                    if (key === 'name' && value === currentAccount.name) {
-                        // Skip if name hasn't changed
-                        return;
+                    // Update GSI1SK if name changes
+                    if (key === 'name') {
+                        updateExpressions.push('#gsi1sk = :gsi1sk');
+                        expressionAttributeNames['#gsi1sk'] = 'gsi1sk';
+                        expressionAttributeValues[':gsi1sk'] = value;
                     }
-                    if (key === 'name' && value !== currentAccount.name) {
-                        // Cannot update partition key - throw error
-                        throw new Error('Cannot change account name as it is used as the primary identifier');
-                    }
-                    updateExpressions.push(`#${key} = :${key}`);
-                    expressionAttributeNames[`#${key}`] = key;
-                    expressionAttributeValues[`:${key}`] = value;
+
+                    updateExpressions.push(`#${dbField} = :${dbField}`);
+                    expressionAttributeNames[`#${dbField}`] = dbField;
+                    expressionAttributeValues[`:${dbField}`] = value;
                 }
             });
 
-            // If no fields to update, return current account
-            if (updateExpressions.length === 0) {
-                return currentAccount;
+            if (updateExpressions.length === 0) return await this.getAccount(accountId) as UIAccount;
+
+            // Updated At
+            if (!updateExpressions.some(e => e.includes('#updated_at'))) {
+                updateExpressions.push('#updated_at = :updated_at');
+                expressionAttributeNames['#updated_at'] = 'updated_at';
+                expressionAttributeValues[':updated_at'] = now;
             }
 
-            // Always update the updatedAt timestamp
-            updateExpressions.push('#updatedAt = :updatedAt');
-            expressionAttributeNames['#updatedAt'] = 'updatedAt';
-            expressionAttributeValues[':updatedAt'] = now;
-
             const command = new UpdateCommand({
-                TableName: DYNAMODB_TABLE_NAME,
+                TableName: APP_TABLE_NAME,
                 Key: {
-                    name: currentAccount.name, // Use the account name as partition key
-                    type: 'account_metadata',
+                    pk: `ACCOUNT#${accountId}`,
+                    sk: 'METADATA',
                 },
                 UpdateExpression: `SET ${updateExpressions.join(', ')}`,
                 ExpressionAttributeNames: expressionAttributeNames,
@@ -281,49 +256,26 @@ export class AccountService {
             });
 
             const response = await getDynamoDBDocumentClient().send(command);
-            const updatedAccount = this.transformToUIAccount(response.Attributes as AccountMetadata);
 
             // Log audit event
             await AuditService.logUserAction({
                 action: 'Update Account',
                 resourceType: 'account',
                 resourceId: accountId,
-                resourceName: currentAccount.name,
+                resourceName: response.Attributes?.account_name || 'unknown',
                 user: updates.updatedBy || 'system',
                 userType: 'user',
                 status: 'success',
-                details: `Updated AWS account "${currentAccount.name}" (${accountId})`,
+                details: `Updated AWS account "${response.Attributes?.account_name}" (${accountId})`,
                 metadata: {
-                    accountId,
-                    updatedFields: Object.keys(updates).filter(key => key !== 'updatedBy'),
-                    previousValues: Object.keys(updates).reduce((acc, key) => {
-                        if (key !== 'updatedBy') {
-                            acc[key] = (currentAccount as any)[key];
-                        }
-                        return acc;
-                    }, {} as any),
-                    newValues: updates,
+                    updates
                 },
             });
 
-            return updatedAccount;
+            return this.transformToUIAccount(response.Attributes);
+
         } catch (error) {
             console.error('Error updating account:', error);
-
-            // Log failed audit event
-            await AuditService.logUserAction({
-                action: 'Update Account',
-                resourceType: 'account',
-                resourceId: accountId,
-                resourceName: 'unknown',
-                user: updates.updatedBy || 'system',
-                userType: 'user',
-                status: 'error',
-                details: `Failed to update AWS account ${accountId}: ${(error as any).message}`,
-                metadata: { error: (error as any).message, attemptedUpdates: updates },
-            });
-
-            // This throws an error so execution won't continue past this point
             throw handleError(error, 'update account');
         }
     }
@@ -333,17 +285,11 @@ export class AccountService {
      */
     static async deleteAccount(accountId: string, deletedBy: string = 'system'): Promise<void> {
         try {
-            // First, get the current account to find the correct name (partition key)
-            const currentAccount = await this.getAccount(accountId);
-            if (!currentAccount) {
-                throw new Error('Account not found');
-            }
-
             const command = new DeleteCommand({
-                TableName: DYNAMODB_TABLE_NAME,
+                TableName: APP_TABLE_NAME,
                 Key: {
-                    name: currentAccount.name, // Use the account name as partition key
-                    type: 'account_metadata',
+                    pk: `ACCOUNT#${accountId}`,
+                    sk: 'METADATA',
                 },
             });
 
@@ -354,40 +300,181 @@ export class AccountService {
                 action: 'Delete Account',
                 resourceType: 'account',
                 resourceId: accountId,
-                resourceName: currentAccount.name,
+                resourceName: accountId,
                 user: deletedBy,
                 userType: 'user',
                 status: 'success',
-                details: `Deleted AWS account "${currentAccount.name}" (${accountId})`,
-                metadata: {
-                    accountId,
-                    deletedAccount: {
-                        name: currentAccount.name,
-                        roleArn: currentAccount.roleArn,
-                        regions: currentAccount.regions,
-                        active: currentAccount.active,
-                    },
-                },
+                details: `Deleted AWS account (${accountId})`,
+                metadata: { accountId },
             });
 
         } catch (error) {
             console.error('Error deleting account:', error);
-
-            // Log failed audit event
-            await AuditService.logUserAction({
-                action: 'Delete Account',
-                resourceType: 'account',
-                resourceId: accountId,
-                resourceName: 'unknown',
-                user: deletedBy,
-                userType: 'user',
-                status: 'error',
-                details: `Failed to delete AWS account ${accountId}: ${(error as any).message}`,
-                metadata: { error: (error as any).message },
-            });
-
             handleError(error, 'delete account');
         }
+    }
+
+    /**
+    * Validate account connection 
+    */
+    /**
+     * Validate credentials directly (without DB update)
+     */
+    static async validateCredentials({ roleArn, externalId, region }: { roleArn: string; externalId?: string; region: string }): Promise<{ isValid: boolean; error?: string }> {
+        try {
+            console.log(`AccountService - Validating credentials for ${roleArn} in ${region}`);
+
+            // 1. Assume Role
+            const stsClient = new STSClient({ region: 'us-east-1' });
+            const assumeRoleCommand = new AssumeRoleCommand({
+                RoleArn: roleArn,
+                RoleSessionName: 'NucleusValidationSession',
+                ExternalId: externalId,
+            });
+
+            const stsResponse = await stsClient.send(assumeRoleCommand);
+
+            if (!stsResponse.Credentials) {
+                throw new Error('Failed to obtain temporary credentials');
+            }
+
+            const credentials = {
+                accessKeyId: stsResponse.Credentials.AccessKeyId!,
+                secretAccessKey: stsResponse.Credentials.SecretAccessKey!,
+                sessionToken: stsResponse.Credentials.SessionToken!,
+            };
+
+            // 2. Verify Access (List ECS Clusters)
+            const ecsClient = new ECSClient({
+                region: region,
+                credentials
+            });
+
+            await ecsClient.send(new ListClustersCommand({ maxResults: 1 }));
+            console.log('AccountService - ECS ListClusters successful');
+
+            // 3. Verify RDS Access (Optional but good)
+            const rdsClient = new RDSClient({
+                region: region,
+                credentials
+            });
+            await rdsClient.send(new DescribeDBInstancesCommand({ MaxRecords: 1 }));
+            console.log('AccountService - RDS DescribeDBInstances successful');
+
+            return { isValid: true };
+
+        } catch (err: any) {
+            console.error('AccountService - Validation Creds Failed:', err);
+            let validationError = err.message || 'Unknown validation error';
+
+            if (err.name === 'AccessDenied' || (err.message && err.message.includes('AccessDenied'))) {
+                validationError = `Access Denied: ${err.message}`;
+            }
+            return { isValid: false, error: validationError };
+        }
+    }
+
+    /**
+    * Validate account connection 
+    */
+    static async validateAccount(accountId: string): Promise<UIAccount> {
+        try {
+            console.log(`AccountService - Validating account: ${accountId}`);
+
+            // 1. Get Account Details
+            const account = await this.getAccount(accountId);
+            if (!account) {
+                throw new Error(`Account ${accountId} not found`);
+            }
+
+            if (!account.roleArn) {
+                throw new Error('No Role ARN configured for this account');
+            }
+
+            // Update status to validating
+            await this.updateAccount(accountId, {
+                connectionStatus: 'validating',
+            });
+
+            const now = new Date().toISOString();
+
+            // 2. Validate using shared logic
+            const validationDetails = await this.validateCredentials({
+                roleArn: account.roleArn,
+                externalId: account.externalId,
+                region: account.regions?.[0] || 'us-east-1'
+            });
+
+            // 3. Update Account Status based on result
+            let finalStatus: 'connected' | 'error' = validationDetails.isValid ? 'connected' : 'error';
+
+            const updates: any = {
+                connectionStatus: finalStatus,
+                lastValidated: now,
+            };
+
+            if (validationDetails.error) {
+                // We might want to store the error somewhere, but currently types don't support "validationError" field.
+                // We can log it.
+                console.warn(`Validation failed for ${accountId}: ${validationDetails.error}`);
+            }
+
+            const updatedAccount = await this.updateAccount(accountId, updates);
+
+            // Log audit
+            await AuditService.logUserAction({
+                action: 'Validate Account',
+                resourceType: 'account',
+                resourceId: accountId,
+                resourceName: account.name,
+                user: updatedAccount.updatedBy || 'system',
+                userType: 'user',
+                status: finalStatus === 'connected' ? 'success' : 'error',
+                details: finalStatus === 'connected'
+                    ? `Account connection validated successfully`
+                    : `Account connection validation failed: ${validationDetails.error}`,
+                metadata: {
+                    accountId,
+                    roleArn: account.roleArn,
+                    error: validationDetails.error
+                },
+            });
+
+            return updatedAccount;
+
+        } catch (error) {
+            console.error('AccountService - Error during validateAccount wrapper:', error);
+            // If we failed to even update status (e.g. DynamoDB error), rethrow
+            throw handleError(error, 'validate account');
+        }
+    }
+
+
+
+    /**
+     * Transform DynamoDB item to UI account format
+     */
+    private static transformToUIAccount(item: any): UIAccount {
+        return {
+            id: item.account_id || item.pk.replace('ACCOUNT#', ''),
+            accountId: item.account_id || item.pk.replace('ACCOUNT#', ''),
+            name: item.account_name || item.gsi1sk,
+            roleArn: item.role_arn,
+            externalId: item.external_id, // Map from DB to UI
+            regions: item.regions || [],
+            active: item.active,
+            description: item.description || '',
+            connectionStatus: item.connection_status || 'unknown',
+            lastValidated: item.updated_at,
+            resourceCount: 0, // Placeholder
+            schedulesCount: 0, // Placeholder
+            monthlySavings: 0, // Placeholder
+            createdAt: item.created_at,
+            updatedAt: item.updated_at,
+            createdBy: item.created_by,
+            updatedBy: item.updated_by,
+            tags: [],
+        };
     }
 
     /**
@@ -407,90 +494,10 @@ export class AccountService {
                 updatedBy: 'system' // Set to authenticated user in real app
             });
 
-            // Create separate audit log specifically for status change
-            try {
-                const statusChangeAction = updatedAccount.active ? 'activated' : 'deactivated';
-                await AuditService.logUserAction({
-                    action: 'Toggle Account Status',
-                    resourceType: 'account',
-                    resourceId: accountId,
-                    resourceName: account.name,
-                    user: 'system',
-                    userType: 'user',
-                    status: 'success',
-                    details: `${updatedAccount.active ? 'Activated' : 'Deactivated'} AWS account "${account.name}" (${accountId})`,
-                    metadata: {
-                        accountId,
-                        previousStatus: account.active,
-                        newStatus: updatedAccount.active,
-                        statusChange: statusChangeAction
-                    }
-                });
-            } catch (auditError) {
-                console.error('Failed to create audit log for account status change:', auditError);
-                // Continue even if audit fails
-            }
-
             return updatedAccount;
         } catch (error) {
             handleError(error, 'toggle account status');
             throw error;
         }
-    }
-
-    /**
-     * Validate account connection (placeholder for actual validation logic)
-     */
-    static async validateAccount(accountId: string): Promise<UIAccount> {
-        try {
-            // Update the account to set connection status to validating
-            await this.updateAccount(accountId, {
-                connectionStatus: 'validating',
-                lastValidated: new Date().toISOString()
-            });
-
-            // TODO: Implement actual cross-account role validation logic here
-            // For now, we'll simulate a successful validation after a delay
-            setTimeout(async () => {
-                try {
-                    await this.updateAccount(accountId, {
-                        connectionStatus: 'connected',
-                        lastValidated: new Date().toISOString()
-                    });
-                } catch (error) {
-                    console.error('Error updating validation status:', error);
-                }
-            }, 2000);
-
-            return await this.getAccount(accountId) as UIAccount;
-        } catch (error) {
-            console.error('Error validating account:', error);
-            throw new Error('Failed to validate account');
-        }
-    }
-
-    /**
-     * Transform DynamoDB item to UI account format
-     */
-    private static transformToUIAccount(item: AccountMetadata): UIAccount {
-        return {
-            id: item.accountId, // Use accountId as ID for UI
-            accountId: item.accountId,
-            name: item.name,
-            roleArn: item.roleArn,
-            regions: item.regions,
-            active: item.active,
-            description: item.description || '',
-            connectionStatus: item.connectionStatus || 'connected',
-            lastValidated: item.lastValidated || new Date().toISOString(),
-            resourceCount: item.resourceCount || 0,
-            schedulesCount: item.schedulesCount || 0,
-            monthlySavings: item.monthlySavings || 0,
-            createdAt: item.createdAt,
-            updatedAt: item.updatedAt,
-            createdBy: item.createdBy,
-            updatedBy: item.updatedBy,
-            tags: item.tags || [],
-        };
     }
 }

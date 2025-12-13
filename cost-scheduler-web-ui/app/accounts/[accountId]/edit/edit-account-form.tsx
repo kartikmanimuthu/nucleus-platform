@@ -2,15 +2,19 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import {
   Save,
   Server,
@@ -18,8 +22,11 @@ import {
   CheckCircle,
   Loader2,
   AlertTriangle,
+  Copy,
+  Check,
+  ChevronDown,
+  Terminal,
 } from "lucide-react";
-import { AccountService } from "@/lib/account-service";
 import { UIAccount } from "@/lib/types";
 import { useToast } from "@/hooks/use-toast";
 import { ClientAccountService } from "@/lib/client-account-service";
@@ -49,6 +56,7 @@ export function EditAccountForm({ account }: EditAccountFormProps) {
     name: "",
     accountId: "",
     roleArn: "",
+    externalId: "",
     description: "",
     regions: [] as string[],
     active: true,
@@ -61,6 +69,12 @@ export function EditAccountForm({ account }: EditAccountFormProps) {
     message: string;
   } | null>(null);
 
+  // Template state
+  const [generating, setGenerating] = useState(false);
+  const [template, setTemplate] = useState<string | null>(null);
+  const [isTemplateOpen, setIsTemplateOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+
   // Update form data when account changes
   useEffect(() => {
     if (account) {
@@ -69,6 +83,7 @@ export function EditAccountForm({ account }: EditAccountFormProps) {
         name: account.name || "",
         accountId: account.accountId || "",
         roleArn: account.roleArn || "",
+        externalId: account.externalId || "",
         description: account.description || "",
         regions: account.regions || [],
         active: account.active ?? true,
@@ -133,7 +148,13 @@ export function EditAccountForm({ account }: EditAccountFormProps) {
     setValidationResult(null);
 
     try {
-      await AccountService.validateAccount(formData.accountId);
+        // Use Client Service for validation!
+      await ClientAccountService.validateAccount({
+          accountId: formData.accountId,
+          roleArn: formData.roleArn,
+          externalId: formData.externalId,
+          region: formData.regions[0] || 'us-east-1'
+      });
       setValidationResult({
         success: true,
         message: "Connection validated successfully",
@@ -158,124 +179,252 @@ export function EditAccountForm({ account }: EditAccountFormProps) {
     }
   };
 
+  const generateTemplate = async () => {
+    // Basic validation
+    if (!formData.accountId || formData.accountId.length !== 12) {
+      toast({
+        variant: "destructive",
+        title: "Invalid Account ID",
+        description: "Please enter a valid 12-digit AWS Account ID first.",
+      });
+      return;
+    }
+
+    try {
+      setGenerating(true);
+      const response = await fetch('/api/accounts/template', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+            accountId: formData.accountId,
+            accountName: formData.name, 
+            region: formData.regions[0] || 'us-east-1',
+            externalId: formData.externalId // Pass existing external ID to maintain consistency
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!data.success) {
+        throw new Error(data.error || 'Failed to generate template');
+      }
+
+      setTemplate(JSON.stringify(data.template, null, 2));
+      setIsTemplateOpen(true);
+      
+    } catch (error: any) {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: error.message || "Failed to generate template",
+      });
+    } finally {
+        setGenerating(false);
+    }
+  };
+
+  const copyToClipboard = () => {
+    if (template) {
+      navigator.clipboard.writeText(template);
+      setCopied(true);
+      toast({
+        title: "Copied",
+        description: "CloudFormation template copied to clipboard",
+      });
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
   return (
-    <div className="container mx-auto">
-
-      <form
-        id="edit-account-form"
-        onSubmit={handleSubmit}
-        className="space-y-6"
-      >
+    <div className="space-y-6">
+      <form id="edit-account-form" onSubmit={handleSubmit} className="space-y-8">
+        
+        {/* Account Configuration Card */}
         <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center space-x-2">
-              <Server className="h-4 w-4" />
-              <span>Account Information</span>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="name">Account Name *</Label>
-                <Input
-                  id="name"
-                  value={formData.name}
-                  onChange={(e) =>
-                    setFormData((prev) => ({ ...prev, name: e.target.value }))
-                  }
-                  placeholder="e.g., Production Account"
-                  required
-                  disabled // Account name cannot be changed as it's used as the primary identifier
-                  className="bg-muted"
-                />
-                <p className="text-xs text-muted-foreground">
-                  Account name cannot be changed as it's used as the primary
-                  identifier
-                </p>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="accountId">AWS Account ID *</Label>
-                <Input
-                  id="accountId"
-                  value={formData.accountId}
-                  onChange={(e) =>
-                    setFormData((prev) => ({
-                      ...prev,
-                      accountId: e.target.value,
-                    }))
-                  }
-                  placeholder="123456789012"
-                  pattern="[0-9]{12}"
-                  maxLength={12}
-                  required
-                  disabled // Account ID should not be editable
-                  className="bg-muted"
-                />
-              </div>
-            </div>
+            <CardHeader>
+                <CardTitle className="flex items-center space-x-2">
+                    <Server className="h-5 w-5" />
+                    <span>Account Configuration</span>
+                </CardTitle>
+                <CardDescription>
+                    Update the account settings and cross-account role
+                </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+                
+                {/* Row 1: ID and Status */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                        <Label htmlFor="accountId">AWS Account ID</Label>
+                        <Input
+                            id="accountId"
+                            value={formData.accountId}
+                            disabled
+                            className="bg-muted font-mono"
+                        />
+                        <p className="text-[0.8rem] text-muted-foreground">
+                            The 12-digit ID of the target account
+                        </p>
+                    </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="roleArn">IAM Role ARN *</Label>
-              <Input
-                id="roleArn"
-                value={formData.roleArn}
-                onChange={(e) =>
-                  setFormData((prev) => ({ ...prev, roleArn: e.target.value }))
-                }
-                placeholder="arn:aws:iam::123456789012:role/CostOptimizationRole"
-                required
-              />
-              <p className="text-xs text-muted-foreground">
-                The IAM role that allows cross-account access for cost
-                optimization
-              </p>
-            </div>
+                     <div className="space-y-2">
+                        <Label>Status</Label>
+                         <div className="flex items-center space-x-2 h-10 border rounded-md px-3">
+                            <Switch
+                                id="active"
+                                checked={formData.active}
+                                onCheckedChange={(checked) =>
+                                    setFormData((prev) => ({ ...prev, active: checked }))
+                                }
+                            />
+                            <Label htmlFor="active" className="cursor-pointer">
+                                {formData.active ? "Active" : "Inactive"}
+                            </Label>
+                        </div>
+                        <p className="text-[0.8rem] text-muted-foreground">
+                            Enable or disable this account
+                        </p>
+                    </div>
+                </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="description">Description</Label>
-              <Textarea
-                id="description"
-                value={formData.description}
-                onChange={(e) =>
-                  setFormData((prev) => ({
-                    ...prev,
-                    description: e.target.value,
-                  }))
-                }
-                placeholder="Optional description for this account..."
-                rows={2}
-              />
-            </div>
+                {/* Row 2: Name and Description */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                         <Label htmlFor="name">Account Name</Label>
+                        <Input
+                            id="name"
+                            value={formData.name}
+                            disabled
+                            className="bg-muted"
+                        />
+                        <p className="text-[0.8rem] text-muted-foreground">
+                            Friendly name (cannot be changed)
+                        </p>
+                    </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="active">Status</Label>
-              <div className="flex items-center space-x-2">
-                <Switch
-                  id="active"
-                  checked={formData.active}
-                  onCheckedChange={(checked) =>
-                    setFormData((prev) => ({ ...prev, active: checked }))
-                  }
-                />
-                <Label htmlFor="active">
-                  {formData.active ? "Active" : "Inactive"}
-                </Label>
-              </div>
-            </div>
-          </CardContent>
+                    <div className="space-y-2">
+                        <Label htmlFor="description">Description (Optional)</Label>
+                        <Input
+                            id="description"
+                            value={formData.description}
+                            onChange={(e) =>
+                                setFormData((prev) => ({
+                                    ...prev,
+                                    description: e.target.value,
+                                }))
+                            }
+                            placeholder="Description..."
+                        />
+                        <p className="text-[0.8rem] text-muted-foreground">
+                            Brief description
+                        </p>
+                    </div>
+                </div>
+
+                 {/* Template Section */}
+                 <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
+                    <div className="flex flex-col space-y-4">
+                        <div className="flex items-center justify-between">
+                            <div className="flex-1 mr-4">
+                                <h3 className="text-sm font-medium text-slate-900">CloudFormation Template</h3>
+                                <p className="text-xs text-slate-500 mt-1">
+                                    Generate the template to deploy in the account {formData.accountId ? `(${formData.accountId})` : ''}
+                                </p>
+                            </div>
+                            <Button 
+                                type="button" 
+                                variant="secondary"
+                                onClick={generateTemplate}
+                                disabled={generating || !formData.accountId}
+                            >
+                                {generating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                                {template ? "Regenerate Template" : "Generate Template"}
+                            </Button>
+                        </div>
+
+                        {template && (
+                            <Collapsible
+                                open={isTemplateOpen}
+                                onOpenChange={setIsTemplateOpen}
+                                className="w-full space-y-2"
+                            >
+                                <div className="flex items-center justify-between space-x-4 px-1 bg-white p-2 rounded border">
+                                    <CollapsibleTrigger asChild>
+                                        <Button variant="ghost" size="sm" className="w-9 p-0">
+                                            <ChevronDown className={`h-4 w-4 transition-transform duration-200 ${isTemplateOpen ? "" : "-rotate-90"}`} />
+                                            <span className="sr-only">Toggle</span>
+                                        </Button>
+                                    </CollapsibleTrigger>
+                                    <span className="text-xs text-muted-foreground flex-1 font-mono">
+                                        template.json
+                                    </span>
+                                    <Button type="button" size="sm" variant="ghost" onClick={copyToClipboard} className="h-8">
+                                        {copied ? (
+                                            <Check className="mr-2 h-3.5 w-3.5 text-green-500" />
+                                        ) : (
+                                            <Copy className="mr-2 h-3.5 w-3.5" />
+                                        )}
+                                        {copied ? "Copied" : "Copy"}
+                                    </Button>
+                                </div>
+                                <CollapsibleContent>
+                                    <div className="rounded-md bg-slate-950 p-4 overflow-auto max-h-[400px]">
+                                        <pre className="text-xs text-slate-50 font-mono">
+                                            {template}
+                                        </pre>
+                                    </div>
+                                </CollapsibleContent>
+                            </Collapsible>
+                        )}
+                    </div>
+                </div>
+
+                {/* Role ARN and External ID */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                     <div className="space-y-2">
+                        <Label htmlFor="roleArn">Cross-Account Role ARN</Label>
+                        <Input
+                            id="roleArn"
+                            value={formData.roleArn}
+                            onChange={(e) =>
+                                setFormData((prev) => ({ ...prev, roleArn: e.target.value }))
+                            }
+                        />
+                         <p className="text-[0.8rem] text-muted-foreground">
+                            Stack Output: 'RoleArn'
+                        </p>
+                    </div>
+
+                     <div className="space-y-2">
+                        <Label htmlFor="externalId">External ID</Label>
+                        <Input
+                            id="externalId"
+                            value={formData.externalId}
+                            readOnly
+                            className="bg-muted font-mono"
+                        />
+                        <p className="text-[0.8rem] text-muted-foreground">
+                             Passed to template as 'ExternalId'
+                        </p>
+                    </div>
+                </div>
+
+            </CardContent>
         </Card>
 
+        {/* AWS Regions Card - Keeping separate as it handles multiple items */}
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center space-x-2">
-              <Globe className="h-4 w-4" />
+              <Globe className="h-5 w-5" />
               <span>AWS Regions</span>
             </CardTitle>
+            <CardDescription>
+                Select the regions you want to manage cost optimization for
+            </CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="space-y-2">
-              <Label>Select regions to manage *</Label>
-              <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto">
+              <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto border rounded-md p-4">
                 {awsRegions.map((region) => (
                   <div key={region.id} className="flex items-center space-x-2">
                     <Checkbox
@@ -283,7 +432,7 @@ export function EditAccountForm({ account }: EditAccountFormProps) {
                       checked={formData.regions.includes(region.id)}
                       onCheckedChange={() => handleRegionToggle(region.id)}
                     />
-                    <Label htmlFor={region.id} className="text-sm">
+                    <Label htmlFor={region.id} className="text-sm cursor-pointer">
                       <div className="font-medium">{region.id}</div>
                       <div className="text-xs text-muted-foreground">
                         {region.name}
@@ -292,13 +441,12 @@ export function EditAccountForm({ account }: EditAccountFormProps) {
                   </div>
                 ))}
               </div>
-              {formData.regions.length > 0 && (
-                <div className="mt-2">
+              <div className="mt-4">
                   <p className="text-sm text-muted-foreground mb-2">
                     Selected regions:
                   </p>
                   <div className="flex flex-wrap gap-1">
-                    {formData.regions.map((regionId) => (
+                    {formData.regions.length > 0 ? formData.regions.map((regionId) => (
                       <Badge
                         key={regionId}
                         variant="secondary"
@@ -306,20 +454,24 @@ export function EditAccountForm({ account }: EditAccountFormProps) {
                       >
                         {regionId}
                       </Badge>
-                    ))}
+                    )) : (
+                        <span className="text-xs text-muted-foreground italic">No regions selected</span>
+                    )}
                   </div>
                 </div>
-              )}
-            </div>
           </CardContent>
         </Card>
 
+        {/* Connection Validation Card */}
         <Card>
           <CardHeader>
-            <CardTitle>Connection Validation</CardTitle>
+            <CardTitle className="flex items-center space-x-2">
+                <Terminal className="h-5 w-5" />
+                <span>Connection Validation</span>
+            </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="flex items-center space-x-2">
+            <div className="flex items-center space-x-4">
               <Button
                 type="button"
                 variant="outline"
@@ -340,31 +492,23 @@ export function EditAccountForm({ account }: EditAccountFormProps) {
                   </>
                 )}
               </Button>
-              <p className="text-sm text-muted-foreground">
-                Verify that the role can be assumed and has required permissions
-              </p>
+               {validationResult && (
+                    <div className={`flex items-center space-x-2 px-3 py-2 rounded-md border ${
+                        validationResult.success 
+                        ? "bg-green-50 border-green-200 text-green-700" 
+                        : "bg-red-50 border-red-200 text-red-700"
+                    }`}>
+                        {validationResult.success ? (
+                            <CheckCircle className="h-4 w-4" />
+                        ) : (
+                            <AlertTriangle className="h-4 w-4" />
+                        )}
+                        <span className="text-sm font-medium">
+                            {validationResult.message}
+                        </span>
+                    </div>
+                )}
             </div>
-
-            {validationResult && (
-              <div
-                className={`p-3 rounded-lg border ${
-                  validationResult.success
-                    ? "bg-green-50 border-green-200 text-green-800"
-                    : "bg-red-50 border-red-200 text-red-800"
-                }`}
-              >
-                <div className="flex items-center space-x-2">
-                  {validationResult.success ? (
-                    <CheckCircle className="h-4 w-4 text-green-600" />
-                  ) : (
-                    <AlertTriangle className="h-4 w-4 text-red-600" />
-                  )}
-                  <span className="text-sm font-medium">
-                    {validationResult.message}
-                  </span>
-                </div>
-              </div>
-            )}
           </CardContent>
         </Card>
 

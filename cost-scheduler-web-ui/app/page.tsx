@@ -20,8 +20,8 @@ import { SchedulesList } from "@/components/schedules/schedules-list";
 import { AccountsList } from "@/components/accounts/accounts-list";
 import { AuditLogs } from "@/components/audit/audit-logs";
 import { formatDate } from "@/lib/date-utils";
-import { ClientAccountService } from "@/lib/client-account-service";
-import { AuditService } from "@/lib/client-audit-service";
+// import { ClientAccountService } from "@/lib/client-account-service"; // Unused
+import { AuditService } from "@/lib/audit-service";
 import { UISchedule } from "@/lib/types";
 import { AccountService } from "@/lib/account-service";
 import { ScheduleService } from "@/lib/schedule-service";
@@ -309,9 +309,6 @@ export default async function Dashboard() {
           </div>
         </CardContent>
       </Card>
-
-      {/* Client-side interactive components */}
-      {/* <HomePageClient /> */}
 
       {/* Main Content Tabs */}
       <Tabs defaultValue="audit" className="space-y-4">

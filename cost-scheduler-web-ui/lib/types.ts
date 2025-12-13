@@ -19,6 +19,7 @@ export interface AccountMetadata {
     accountId: string;
     name: string;
     roleArn: string;
+    externalId?: string; // Correctly added optional externalId
     regions: string[];
     active: boolean;
     description?: string;
@@ -50,11 +51,12 @@ export interface UISchedule extends Omit<Schedule, 'type'> {
 
 export interface UIAccount extends Omit<AccountMetadata, 'type'> {
     id: string;
+    externalId?: string;
 }
 
 // Next.js Search Params type for URL parameters
 export interface SearchParams {
-  [key: string]: string | string[] | undefined;
+    [key: string]: string | string[] | undefined;
 }
 
 // Audit Log types

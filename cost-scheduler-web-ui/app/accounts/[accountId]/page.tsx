@@ -31,7 +31,7 @@ import {
   Eye,
   Loader2,
 } from "lucide-react";
-import { AccountService } from "@/lib/account-service";
+import { ClientAccountService } from "@/lib/client-account-service";
 import { UIAccount } from "@/lib/types";
 import { DeleteAccountDialog } from "@/components/accounts/delete-account-dialog";
 
@@ -140,7 +140,7 @@ export default function AccountDetailPage({ params }: AccountDetailPageProps) {
     try {
       setLoading(true);
       setError(null);
-      const accountData = await AccountService.getAccount(
+      const accountData = await ClientAccountService.getAccount(
         decodeURIComponent(accountId)
       );
       if (!accountData) {
@@ -165,7 +165,13 @@ export default function AccountDetailPage({ params }: AccountDetailPageProps) {
 
     try {
       setValidatingConnection(true);
-      await AccountService.validateAccount(account.id);
+      // Client-side validation call
+      await ClientAccountService.validateAccount({
+        accountId: account.accountId,
+        region: account.regions[0] || 'us-east-1',
+        roleArn: account.roleArn,
+        externalId: account.externalId
+      });
       await loadAccount(); // Reload to get updated status
     } catch (error) {
       console.error("Error validating connection:", error);

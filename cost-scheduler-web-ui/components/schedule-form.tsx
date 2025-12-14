@@ -49,10 +49,10 @@ const scheduleFormSchema = z.object({
   name: z.string().min(1, "Schedule name is required"),
   starttime: z
     .string()
-    .regex(/^\d{2}:\d{2}:\d{2}$/, "Start time must be in HH:MM:SS format"),
+    .min(1, "Start time is required"),
   endtime: z
     .string()
-    .regex(/^\d{2}:\d{2}:\d{2}$/, "End time must be in HH:MM:SS format"),
+    .min(1, "End time is required"),
   timezone: z.string().min(1, "Timezone is required"),
   active: z.boolean(),
   days: z.array(z.string()).min(1, "At least one day must be selected"),
@@ -464,10 +464,15 @@ export function ScheduleForm({ initialData, isEditing = false }: ScheduleFormPro
                   <FormItem>
                     <FormLabel>Start Time</FormLabel>
                     <FormControl>
-                      <Input {...field} placeholder="09:00:00" />
+                      <Input 
+                        type="time" 
+                        {...field} 
+                        value={field.value?.substring(0, 5) || ''}
+                        onChange={(e) => field.onChange(e.target.value + ':00')}
+                      />
                     </FormControl>
                     <FormDescription>
-                      Format: HH:MM:SS (24-hour)
+                      When resources should be started
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
@@ -481,10 +486,15 @@ export function ScheduleForm({ initialData, isEditing = false }: ScheduleFormPro
                   <FormItem>
                     <FormLabel>End Time</FormLabel>
                     <FormControl>
-                      <Input {...field} placeholder="18:00:00" />
+                      <Input 
+                        type="time" 
+                        {...field} 
+                        value={field.value?.substring(0, 5) || ''}
+                        onChange={(e) => field.onChange(e.target.value + ':00')}
+                      />
                     </FormControl>
                     <FormDescription>
-                      Format: HH:MM:SS (24-hour)
+                      When resources should be stopped
                     </FormDescription>
                     <FormMessage />
                   </FormItem>

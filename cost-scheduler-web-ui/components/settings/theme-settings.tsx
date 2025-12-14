@@ -1,82 +1,196 @@
 "use client"
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Label } from "@/components/ui/label"
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
+import * as React from "react"
+import { Moon, Sun, Check } from "lucide-react"
 import { useTheme } from "next-themes"
-import { Monitor, Moon, Sun } from "lucide-react"
+
+import { cn } from "@/lib/utils"
+import { Button } from "@/components/ui/button"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import { Label } from "@/components/ui/label"
+import { themes } from "@/components/settings/theme-registry"
 
 export function ThemeSettings() {
-  const { theme, setTheme } = useTheme()
+  const { setTheme: setMode, resolvedTheme: mode } = useTheme()
+  const [config, setConfig] = React.useState({
+    theme: "zinc",
+    radius: 0.5,
+    font: "inter"
+  })
+
+  const [mounted, setMounted] = React.useState(false)
+
+  React.useEffect(() => {
+    setMounted(true)
+  }, [])
+
+  // Apply theme changes
+  React.useEffect(() => {
+    if (!mounted) return
+    
+    const theme = themes.find((t) => t.name === config.theme)
+    if (!theme) return
+
+    const root = document.documentElement
+    const isDark = mode === "dark"
+    const cssVars = isDark ? theme.cssVars.dark : theme.cssVars.light
+
+    Object.entries(cssVars).forEach(([key, value]) => {
+      root.style.setProperty(key, value)
+    })
+    
+    // Apply Radius
+    root.style.setProperty("--radius", `${config.radius}rem`)
+
+    // Apply Font
+    let fontVar = "system-ui"
+    if (config.font === "inter") fontVar = "var(--font-inter)"
+    if (config.font === "manrope") fontVar = "var(--font-manrope)"
+    root.style.setProperty("--font-sans", fontVar)
+
+  }, [config, mode, mounted])
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Theme Preferences</CardTitle>
-        <CardDescription>
-          Choose how the application looks and feels. Your preference will be saved and applied across all sessions.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-6">
-        <div className="space-y-4">
-          <Label className="text-base font-medium">Appearance</Label>
-          <RadioGroup value={theme} onValueChange={setTheme} className="grid grid-cols-3 gap-4">
-            <div className="flex items-center space-x-2 border rounded-lg p-4 hover:bg-accent cursor-pointer">
-              <RadioGroupItem value="light" id="light" />
-              <Label htmlFor="light" className="flex items-center space-x-2 cursor-pointer">
-                <Sun className="h-4 w-4" />
-                <span>Light</span>
-              </Label>
-            </div>
-            <div className="flex items-center space-x-2 border rounded-lg p-4 hover:bg-accent cursor-pointer">
-              <RadioGroupItem value="dark" id="dark" />
-              <Label htmlFor="dark" className="flex items-center space-x-2 cursor-pointer">
-                <Moon className="h-4 w-4" />
-                <span>Dark</span>
-              </Label>
-            </div>
-            <div className="flex items-center space-x-2 border rounded-lg p-4 hover:bg-accent cursor-pointer">
-              <RadioGroupItem value="system" id="system" />
-              <Label htmlFor="system" className="flex items-center space-x-2 cursor-pointer">
-                <Monitor className="h-4 w-4" />
-                <span>System</span>
-              </Label>
-            </div>
-          </RadioGroup>
-        </div>
-
-        <div className="space-y-4">
-          <Label className="text-base font-medium">Preview</Label>
-          <div className="grid grid-cols-2 gap-4">
-            {/* Light Theme Preview */}
-            <div className="border rounded-lg p-4 bg-white text-black">
-              <div className="space-y-2">
-                <div className="h-2 bg-gray-200 rounded w-3/4"></div>
-                <div className="h-2 bg-gray-200 rounded w-1/2"></div>
-                <div className="h-8 bg-blue-500 rounded w-1/3"></div>
-              </div>
-              <p className="text-xs text-gray-600 mt-2">Light theme</p>
-            </div>
-
-            {/* Dark Theme Preview */}
-            <div className="border rounded-lg p-4 bg-gray-900 text-white">
-              <div className="space-y-2">
-                <div className="h-2 bg-gray-700 rounded w-3/4"></div>
-                <div className="h-2 bg-gray-700 rounded w-1/2"></div>
-                <div className="h-8 bg-blue-600 rounded w-1/3"></div>
-              </div>
-              <p className="text-xs text-gray-400 mt-2">Dark theme</p>
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle>Theme Preferences</CardTitle>
+          <CardDescription>
+            Customize the look and feel of the application.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-8">
+            {/* Mode Picker */}
+          <div className="space-y-2">
+            <Label>Mode</Label>
+            <div className="grid grid-cols-3 gap-2 max-w-sm">
+              <Button
+                variant={"outline"}
+                size="sm"
+                onClick={() => setMode("light")}
+                className={cn(mode === "light" && "border-2 border-primary")}
+              >
+                <Sun className="mr-2 h-4 w-4" />
+                Light
+              </Button>
+              <Button
+                variant={"outline"}
+                size="sm"
+                onClick={() => setMode("dark")}
+                className={cn(mode === "dark" && "border-2 border-primary")}
+              >
+                <Moon className="mr-2 h-4 w-4" />
+                Dark
+              </Button>
+              <Button
+                variant={"outline"}
+                size="sm"
+                onClick={() => setMode("system")}
+                className={cn(mode === "system" && "border-2 border-primary")}
+              >
+                <span className="mr-2">💻</span>
+                System
+              </Button>
             </div>
           </div>
-        </div>
 
-        <div className="bg-muted p-4 rounded-lg">
-          <p className="text-sm text-muted-foreground">
-            <strong>System theme:</strong> Automatically switches between light and dark based on your device settings.
-            This helps reduce eye strain and saves battery on OLED displays.
-          </p>
-        </div>
-      </CardContent>
-    </Card>
+          {/* Color Picker */}
+          <div className="space-y-2">
+            <Label>Color</Label>
+            <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+              {themes.map((theme) => {
+                const isActive = config.theme === theme.name
+                 // Use a hardcoded color generic representation or the actual active color
+                 // For simplified preview, we just use a colored circle
+                return (
+                  <Button
+                    variant={"outline"}
+                    size="sm"
+                    key={theme.name}
+                    onClick={() => setConfig({ ...config, theme: theme.name })}
+                    className={cn(
+                      "justify-start",
+                      isActive && "border-2 border-primary"
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        "mr-1 flex h-5 w-5 shrink-0 -translate-x-1 items-center justify-center rounded-full bg-[--theme-primary]",
+                      )}
+                      style={
+                        {
+                          "--theme-primary": `hsl(${theme.activeColor[mode === "dark" ? "dark" : "light"]})`,
+                        } as React.CSSProperties
+                      }
+                    >
+                      {isActive && <Check className="h-3 w-3 text-white" />}
+                    </span>
+                    {theme.label}
+                  </Button>
+                )
+              })}
+            </div>
+          </div>
+
+           {/* Font Picker */}
+           <div className="space-y-2">
+            <Label>Font</Label>
+            <div className="grid grid-cols-3 gap-2 max-w-sm">
+                <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setConfig({ ...config, font: "inter" })}
+                    className={cn(config.font === "inter" && "border-2 border-primary")}
+                    style={{ fontFamily: "var(--font-inter)" }}
+                >
+                    Inter
+                </Button>
+                <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setConfig({ ...config, font: "manrope" })}
+                    className={cn(config.font === "manrope" && "border-2 border-primary")}
+                    style={{ fontFamily: "var(--font-manrope)" }}
+                >
+                    Manrope
+                </Button>
+                <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setConfig({ ...config, font: "system" })}
+                    className={cn(config.font === "system" && "border-2 border-primary")}
+                    style={{ fontFamily: "system-ui" }}
+                >
+                    System
+                </Button>
+            </div>
+           </div>
+
+          {/* Radius Picker */}
+          <div className="space-y-2">
+            <Label>Radius</Label>
+            <div className="grid grid-cols-5 gap-2 max-w-sm">
+                {[0, 0.3, 0.5, 0.75, 1.0].map((value) => (
+                    <Button
+                        key={value}
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setConfig({ ...config, radius: value })}
+                        className={cn(config.radius === value && "border-2 border-primary")}
+                    >
+                        {value}
+                    </Button>
+                ))}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
   )
 }

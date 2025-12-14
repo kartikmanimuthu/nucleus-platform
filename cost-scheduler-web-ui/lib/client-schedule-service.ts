@@ -14,7 +14,7 @@ export class ClientScheduleService {
     }): Promise<UISchedule[]> {
         try {
             console.log('ClientScheduleService - Fetching schedules via API route', filters);
-            
+
             // Build query parameters
             const params = new URLSearchParams();
             if (filters?.statusFilter) {
@@ -33,6 +33,7 @@ export class ClientScheduleService {
                 headers: {
                     'Content-Type': 'application/json',
                 },
+                cache: 'no-store',
             });
 
             const result = await response.json();
@@ -54,16 +55,17 @@ export class ClientScheduleService {
     }
 
     /**
-     * Get a specific schedule by name via API route
+     * Get a specific schedule by ID via API route
      */
-    static async getSchedule(name: string): Promise<UISchedule | null> {
+    static async getSchedule(id: string): Promise<UISchedule | null> {
         try {
-            console.log('ClientScheduleService - Fetching schedule:', name);
-            const response = await fetch(`${this.baseUrl}/${encodeURIComponent(name)}`, {
+            console.log('ClientScheduleService - Fetching schedule:', id);
+            const response = await fetch(`${this.baseUrl}/${encodeURIComponent(id)}`, {
                 method: 'GET',
                 headers: {
                     'Content-Type': 'application/json',
                 },
+                cache: 'no-store',
             });
 
             const result = await response.json();
@@ -76,11 +78,13 @@ export class ClientScheduleService {
                 throw new Error(result.error || `HTTP error! status: ${response.status}`);
             }
 
-            if (!result.success) {
-                throw new Error(result.error || 'Failed to fetch schedule');
-            }
+            // Note: API might return object directly or wrapped in success/data.
+            // Our updated routes return object directly or {error}.
+            // Previous code handled success: true wrapped.
+            // Let's check updated route return type from previous diffs.
+            // Updated route returns `NextResponse.json(schedule)` directly.
 
-            return result.data;
+            return result as UISchedule;
         } catch (error) {
             console.error('ClientScheduleService - Error fetching schedule:', error);
             throw error;
@@ -91,6 +95,7 @@ export class ClientScheduleService {
      * Create a new schedule via API route
      */
     static async createSchedule(schedule: Omit<Schedule, 'id' | 'type'>): Promise<Schedule> {
+        // Create remains same, but maybe returns object directly?
         try {
             console.log('ClientScheduleService - Creating schedule:', schedule.name);
             const response = await fetch(this.baseUrl, {
@@ -107,12 +112,22 @@ export class ClientScheduleService {
                 throw new Error(result.error || `HTTP error! status: ${response.status}`);
             }
 
-            if (!result.success) {
+            // Route handler returns { success: true, data: ... }.
+            // Wait, I didn't update CREATE/POST route.
+            // Assuming CREATE route is in app/api/schedules/route.ts (root).
+            // Usually CREATE returns the created object.
+
+            // Previous code expected:
+            // if (!result.success) throw...
+            // return result.data;
+
+            // I should respect existing contract if I haven't changed CREATE route.
+            // I haven't changed CREATE route (it's in parent dir likely).
+
+            if (result.success !== undefined && !result.success) {
                 throw new Error(result.error || 'Failed to create schedule');
             }
-
-            console.log('ClientScheduleService - Successfully created schedule:', result.data.name);
-            return result.data;
+            return result.data || result;
         } catch (error) {
             console.error('ClientScheduleService - Error creating schedule:', error);
             throw error;
@@ -123,12 +138,12 @@ export class ClientScheduleService {
      * Update an existing schedule via API route
      */
     static async updateSchedule(
-        scheduleName: string,
+        scheduleId: string,
         updates: Partial<Omit<Schedule, 'name' | 'type'>>
     ): Promise<UISchedule> {
         try {
-            console.log('ClientScheduleService - Updating schedule:', scheduleName);
-            const response = await fetch(`${this.baseUrl}/${encodeURIComponent(scheduleName)}`, {
+            console.log('ClientScheduleService - Updating schedule:', scheduleId);
+            const response = await fetch(`${this.baseUrl}/${encodeURIComponent(scheduleId)}`, {
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json',
@@ -142,12 +157,9 @@ export class ClientScheduleService {
                 throw new Error(result.error || `HTTP error! status: ${response.status}`);
             }
 
-            if (!result.success) {
-                throw new Error(result.error || 'Failed to update schedule');
-            }
-
-            console.log('ClientScheduleService - Successfully updated schedule:', scheduleName);
-            return result.data;
+            // Updated route returns `updatedSchedule` directly.
+            // So we return result.
+            return result as UISchedule;
         } catch (error) {
             console.error('ClientScheduleService - Error updating schedule:', error);
             throw error;
@@ -157,10 +169,10 @@ export class ClientScheduleService {
     /**
      * Delete a schedule via API route
      */
-    static async deleteSchedule(name: string): Promise<void> {
+    static async deleteSchedule(id: string): Promise<void> {
         try {
-            console.log('ClientScheduleService - Deleting schedule:', name);
-            const response = await fetch(`${this.baseUrl}/${encodeURIComponent(name)}`, {
+            console.log('ClientScheduleService - Deleting schedule:', id);
+            const response = await fetch(`${this.baseUrl}/${encodeURIComponent(id)}`, {
                 method: 'DELETE',
                 headers: {
                     'Content-Type': 'application/json',
@@ -173,11 +185,7 @@ export class ClientScheduleService {
                 throw new Error(result.error || `HTTP error! status: ${response.status}`);
             }
 
-            if (!result.success) {
-                throw new Error(result.error || 'Failed to delete schedule');
-            }
-
-            console.log('ClientScheduleService - Successfully deleted schedule:', name);
+            // Updated route returns { success: true }.
         } catch (error) {
             console.error('ClientScheduleService - Error deleting schedule:', error);
             throw error;
@@ -187,10 +195,10 @@ export class ClientScheduleService {
     /**
      * Toggle schedule active status via API route
      */
-    static async toggleScheduleStatus(name: string): Promise<UISchedule> {
+    static async toggleScheduleStatus(id: string): Promise<UISchedule> {
         try {
-            console.log('ClientScheduleService - Toggling schedule status:', name);
-            const response = await fetch(`${this.baseUrl}/${encodeURIComponent(name)}/toggle`, {
+            console.log('ClientScheduleService - Toggling schedule status:', id);
+            const response = await fetch(`${this.baseUrl}/${encodeURIComponent(id)}/toggle`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -203,12 +211,12 @@ export class ClientScheduleService {
                 throw new Error(result.error || `HTTP error! status: ${response.status}`);
             }
 
-            if (!result.success) {
+            if (result.success !== undefined && !result.success) {
                 throw new Error(result.error || 'Failed to toggle schedule status');
             }
 
-            console.log('ClientScheduleService - Successfully toggled schedule status:', name);
-            return result.data;
+            console.log('ClientScheduleService - Successfully toggled schedule status:', id);
+            return result.data || result;
         } catch (error) {
             console.error('ClientScheduleService - Error toggling schedule status:', error);
             throw error;

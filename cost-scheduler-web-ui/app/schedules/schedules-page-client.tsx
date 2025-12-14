@@ -28,7 +28,6 @@ import { UISchedule } from "@/lib/types";
 import { useToast } from "@/hooks/use-toast";
 import { useRouter } from "next/navigation";
 import { useIsFirstRender } from "@/hooks/use-first-render";
-import { useDebouncedCallback } from "@/hooks/use-debounce";
 import { ClientScheduleService } from "@/lib/client-schedule-service";
 
 const statusFilters = [
@@ -74,19 +73,21 @@ export function SchedulesPageClient({
   const [error, setError] = useState<string | null>(initialError || null);
   const [loading, setLoading] = useState(false);
 
-  // UI state - initialize with server provided values or defaults
+  // Effective filters (used for fetching data)
   const [searchTerm, setSearchTerm] = useState(initialFilters?.searchTerm || "");
   const [statusFilter, setStatusFilter] = useState(initialFilters?.statusFilter || "all");
   const [resourceFilter, setResourceFilter] = useState(initialFilters?.resourceFilter || "all");
+
+  // Local UI state for filters (pending application)
+  const [localSearchTerm, setLocalSearchTerm] = useState(initialFilters?.searchTerm || "");
+  const [localStatusFilter, setLocalStatusFilter] = useState(initialFilters?.statusFilter || "all");
+  const [localResourceFilter, setLocalResourceFilter] = useState(initialFilters?.resourceFilter || "all");
+
   const [viewMode, setViewMode] = useState<"table" | "grid">("table");
   const [selectedSchedules, setSelectedSchedules] = useState<string[]>([]);
   const [bulkActionsOpen, setBulkActionsOpen] = useState(false);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   
-  // Debounced search term setter
-  // const debouncedSearch = useDebouncedCallback((value: string) => {
-  //   setSearchTerm(value);
-  // }, 500);
   const { toast } = useToast();
 
   // Update URL with current filters
@@ -140,40 +141,13 @@ export function SchedulesPageClient({
   // Track if this is the first render
   const isFirstRender = useIsFirstRender();
 
-  // Update URL and fetch data when filters change
+  // Update URL and fetch data when EFFECTIVE filters change
   useEffect(() => {
-    // Build URL with current filters
-    const url = new URL(window.location.href);
-    
-    // Update or remove search params based on filter values
-    if (searchTerm) {
-      url.searchParams.set('search', searchTerm);
-    } else {
-      url.searchParams.delete('search');
-    }
-    
-    if (statusFilter && statusFilter !== 'all') {
-      url.searchParams.set('status', statusFilter);
-    } else {
-      url.searchParams.delete('status');
-    }
-    
-    if (resourceFilter && resourceFilter !== 'all') {
-      url.searchParams.set('resource', resourceFilter);
-    } else {
-      url.searchParams.delete('resource');
-    }
-    
-    // Update URL without page reload
-    window.history.pushState({}, '', url.toString());
-    
-    // Load schedules with new filters (skip on initial render if we already have initial data)
+    // Only trigger if not first render, OR if we want to ensure client-side fetch sync
     if (!isFirstRender) {
       loadSchedulesWithFilters();
     }
   }, [searchTerm, statusFilter, resourceFilter, loadSchedulesWithFilters, isFirstRender]);
-
-
 
   // Use schedules directly since filtering is done server-side
   const filteredSchedules = schedules;
@@ -194,8 +168,39 @@ export function SchedulesPageClient({
     }
   };
 
+  // Sync state with props when server re-renders (e.g. after refresh)
+  useEffect(() => {
+    setSchedules(initialSchedules);
+  }, [initialSchedules]);
+
+  useEffect(() => {
+    if (initialError) setError(initialError);
+  }, [initialError]);
+
   const refreshSchedules = () => {
+    // Reloads server data but maintains current client state filters?
+    // User wants "Refresh" to refresh the full state of the page.
+    // We'll re-fetch with current EFFECTIVE filters.
+    // ClientScheduleService has 'no-store' so it will get fresh data.
     loadSchedulesWithFilters();
+  };
+
+  const handleApplyFilter = () => {
+    setSearchTerm(localSearchTerm);
+    setStatusFilter(localStatusFilter);
+    setResourceFilter(localResourceFilter);
+  };
+
+  const handleClearFilter = () => {
+    // Reset local state
+    setLocalSearchTerm("");
+    setLocalStatusFilter("all");
+    setLocalResourceFilter("all");
+    
+    // Reset effective state (triggers reload)
+    setSearchTerm("");
+    setStatusFilter("all");
+    setResourceFilter("all");
   };
 
   const handleCreateSchedule = () => {
@@ -214,7 +219,7 @@ export function SchedulesPageClient({
         </div>
         <div className="flex items-center justify-end space-x-2">
           <Button variant="outline" onClick={refreshSchedules}>
-            <RefreshCw className="mr-2 h-4 w-4" />
+            <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
             Refresh
           </Button>
           <Button onClick={handleCreateSchedule}>
@@ -350,13 +355,16 @@ export function SchedulesPageClient({
             <div className="flex flex-col md:flex-row gap-4">
               <div className="flex-1">
                 <Input
-                  placeholder="Search schedules by name, description, or creator..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
+                  placeholder="Search schedules..."
+                  value={localSearchTerm}
+                  onChange={(e) => setLocalSearchTerm(e.target.value)}
                   className="w-full"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleApplyFilter();
+                  }}
                 />
               </div>
-              <Select value={statusFilter} onValueChange={setStatusFilter}>
+              <Select value={localStatusFilter} onValueChange={setLocalStatusFilter}>
                 <SelectTrigger className="w-[180px]">
                   <SelectValue placeholder="Filter by status" />
                 </SelectTrigger>
@@ -368,7 +376,7 @@ export function SchedulesPageClient({
                   ))}
                 </SelectContent>
               </Select>
-              <Select value={resourceFilter} onValueChange={setResourceFilter}>
+              <Select value={localResourceFilter} onValueChange={setLocalResourceFilter}>
                 <SelectTrigger className="w-[180px]">
                   <SelectValue placeholder="Filter by resource" />
                 </SelectTrigger>
@@ -380,6 +388,12 @@ export function SchedulesPageClient({
                   ))}
                 </SelectContent>
               </Select>
+               <Button variant="default" onClick={handleApplyFilter}>
+                Apply Filter
+              </Button>
+              <Button variant="outline" onClick={handleClearFilter}>
+                Clear Filters
+              </Button>
             </div>
           </CardContent>
         </Card>

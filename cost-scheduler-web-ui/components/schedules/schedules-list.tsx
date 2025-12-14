@@ -278,7 +278,7 @@ export function SchedulesList({ schedules, loading, error }: { schedules: UISche
                             onClick={() =>
                               router.push(
                                 `/schedules/${encodeURIComponent(
-                                  schedule.name
+                                  schedule.id
                                 )}`
                               )
                             }
@@ -290,7 +290,7 @@ export function SchedulesList({ schedules, loading, error }: { schedules: UISche
                             onClick={() =>
                               router.push(
                                 `/schedules/${encodeURIComponent(
-                                  schedule.name
+                                  schedule.id
                                 )}/edit`
                               )
                             }
@@ -305,7 +305,7 @@ export function SchedulesList({ schedules, loading, error }: { schedules: UISche
                             Duplicate
                           </DropdownMenuItem>
                           <DropdownMenuItem
-                            onClick={() => executeScheduleNow(schedule.name)}
+                            onClick={() => executeScheduleNow(schedule.id)}
                           >
                             <Play className="mr-2 h-4 w-4" />
                             Execute Now

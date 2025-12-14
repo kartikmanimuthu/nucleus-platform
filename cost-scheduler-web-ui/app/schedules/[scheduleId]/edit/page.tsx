@@ -15,17 +15,17 @@ import { ScheduleForm } from "@/components/schedule-form";
 import { ClientScheduleService } from "@/lib/client-schedule-service";
 import { UISchedule } from "@/lib/types";
 
-export default function EditSchedulePage({ params }: { params: Promise<{ name: string }> }) {
+export default function EditSchedulePage({ params }: { params: Promise<{ scheduleId: string }> }) {
   const router = useRouter();
-  const { name } = use(params);
+  const { scheduleId } = use(params);
   const [schedule, setSchedule] = useState<UISchedule | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     async function fetchSchedule() {
       try {
-        const decodedName = decodeURIComponent(name);
-        const data = await ClientScheduleService.getSchedule(decodedName);
+        const decodedId = decodeURIComponent(scheduleId);
+        const data = await ClientScheduleService.getSchedule(decodedId);
         if (data) {
           setSchedule(data);
         } else {
@@ -39,7 +39,7 @@ export default function EditSchedulePage({ params }: { params: Promise<{ name: s
       }
     }
     fetchSchedule();
-  }, [name]);
+  }, [scheduleId]);
 
   if (loading) {
     return (

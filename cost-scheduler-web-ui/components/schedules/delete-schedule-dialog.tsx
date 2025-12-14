@@ -35,7 +35,7 @@ export function DeleteScheduleDialog({
 
     try {
       setIsDeleting(true);
-      await ClientScheduleService.deleteSchedule(schedule.name);
+      await ClientScheduleService.deleteSchedule(schedule.id);
       
       toast({
         variant: "success",

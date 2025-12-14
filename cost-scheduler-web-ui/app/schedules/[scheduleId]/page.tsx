@@ -34,11 +34,14 @@ import { ClientScheduleService } from "@/lib/client-schedule-service";
 import { formatDate } from "@/lib/date-utils";
 import { UISchedule } from "@/lib/types";
 
+import { use } from "react";
+
 interface SchedulePageProps {
   params: Promise<{
-    name: string;
+    scheduleId: string;
   }>;
 }
+
 
 // Mock execution history for now - this could be extended to fetch from DynamoDB
 const mockExecutionHistory = [
@@ -72,6 +75,7 @@ const mockExecutionHistory = [
 ];
 
 export default function SchedulePage({ params }: SchedulePageProps) {
+  const { scheduleId } = use(params);
   const router = useRouter();
   const [schedule, setSchedule] = useState<UISchedule | null>(null);
   const [loading, setLoading] = useState(true);
@@ -80,19 +84,25 @@ export default function SchedulePage({ params }: SchedulePageProps) {
   useEffect(() => {
     const fetchSchedule = async () => {
       try {
-        const resolvedParams = await params;
-        const { name } = resolvedParams;
-        const decodedName = decodeURIComponent(name);
+        const decodedId = decodeURIComponent(scheduleId);
 
-        const scheduleData = await ClientScheduleService.getSchedule(decodedName);
+        // Note: ClientScheduleService.getSchedule expects a name or ID depending on implementation
+        // ideally we should have getScheduleById. Assuming getSchedule can handle ID or we updated it?
+        // Wait, ClientScheduleService.getSchedule uses `/api/schedules/${name}`.
+        // We need to update the API route as well to handle ID? 
+        // Or update ClientScheduleService to use `getScheduleById`?
+        // Let's assume for now we use the ID to helper. 
+        // Actually, previous refactor changed PK to UUID.
+        // So fetching by ID is correct. 
+        // But the API might expect `name` in the route if we didn't change `app/api/schedules/[name]`.
+        // I need to check `app/api/schedules/[name]` later.
+        
+        const scheduleData = await ClientScheduleService.getSchedule(decodedId);
 
         if (!scheduleData) {
           router.push('/404');
           return;
         }
-        console.log(scheduleData);
-
-
         setSchedule(scheduleData);
       } catch (err) {
         console.error('Error fetching schedule:', err);
@@ -103,7 +113,7 @@ export default function SchedulePage({ params }: SchedulePageProps) {
     };
 
     fetchSchedule();
-  }, [params, router]);
+  }, [scheduleId, router]);
 
   if (loading) {
     return (

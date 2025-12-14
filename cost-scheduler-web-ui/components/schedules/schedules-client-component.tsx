@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
   Card,
@@ -45,6 +45,11 @@ interface SchedulesClientProps {
   initialSchedules: UISchedule[];
   statusFilters: FilterOption[];
   resourceFilters: FilterOption[];
+    initialFilters?: {
+    statusFilter: string;
+    resourceFilter: string;
+    searchTerm: string;
+  };
 }
 
 /**
@@ -55,6 +60,7 @@ export default function SchedulesClient({
   initialSchedules,
   statusFilters,
   resourceFilters,
+    initialFilters,
 }: SchedulesClientProps) {
   const router = useRouter();
 
@@ -64,9 +70,9 @@ export default function SchedulesClient({
   const [error, setError] = useState<string | null>(null);
 
   // UI state
-  const [searchTerm, setSearchTerm] = useState("");
-  const [statusFilter, setStatusFilter] = useState("all");
-  const [resourceFilter, setResourceFilter] = useState("all");
+  const [searchTerm, setSearchTerm] = useState(initialFilters?.searchTerm || "");
+  const [statusFilter, setStatusFilter] = useState(initialFilters?.statusFilter || "all");
+  const [resourceFilter, setResourceFilter] = useState(initialFilters?.resourceFilter || "all");
   const [viewMode, setViewMode] = useState<"table" | "grid">("table");
   const [selectedSchedules, setSelectedSchedules] = useState<string[]>([]);
   const [bulkActionsOpen, setBulkActionsOpen] = useState(false);
@@ -74,48 +80,62 @@ export default function SchedulesClient({
 
   const { toast } = useToast();
 
-  // Refresh schedules from API
-  const loadSchedules = async () => {
+    // Load schedules with current filters
+  const loadSchedulesWithFilters = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
-      const data = await ClientScheduleService.getSchedules();
-      setSchedules(data);
+      
+      const filters = {
+        statusFilter: statusFilter !== 'all' ? statusFilter : undefined,
+        resourceFilter: resourceFilter !== 'all' ? resourceFilter : undefined,
+        searchTerm: searchTerm || undefined,
+      };
+      
+      const result = await ClientScheduleService.getSchedules(filters);
+      setSchedules(result);
+      
     } catch (err) {
       console.error("Error loading schedules:", err);
       setError(err instanceof Error ? err.message : "Failed to load schedules");
     } finally {
       setLoading(false);
     }
+  }, [statusFilter, resourceFilter, searchTerm]);
+
+  // Refresh schedules (load with current filters)
+  const refreshSchedules = () => {
+    loadSchedulesWithFilters();
   };
 
-  // Filter schedules based on search and filters
-  const filteredSchedules = schedules.filter((schedule) => {
-    const matchesSearch =
-      schedule.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (schedule.description &&
-        schedule.description
-          .toLowerCase()
-          .includes(searchTerm.toLowerCase())) ||
-      (schedule.createdBy &&
-        schedule.createdBy.toLowerCase().includes(searchTerm.toLowerCase()));
+    // Handle clearing filters
+    const clearFilters = () => {
+        setSearchTerm("");
+        setStatusFilter("all");
+        setResourceFilter("all");
+        // We need to call service without filters, but state updates are async.
+        // So we call service directly with empty filters
+        loadAllSchedules();
+    };
 
-    const matchesStatus =
-      statusFilter === "all" ||
-      (statusFilter === "active" && schedule.active) ||
-      (statusFilter === "inactive" && !schedule.active);
+    const loadAllSchedules = async () => {
+        try {
+            setLoading(true);
+            setError(null);
+            const result = await ClientScheduleService.getSchedules();
+            setSchedules(result);
+        } catch (err) {
+            console.error("Error loading schedules:", err);
+            setError(err instanceof Error ? err.message : "Failed to load schedules");
+        } finally {
+            setLoading(false);
+        }
+    }
 
-    const matchesResource =
-      resourceFilter === "all" ||
-      (schedule.resourceTypes &&
-        schedule.resourceTypes.includes(resourceFilter));
-
-    return matchesSearch && matchesStatus && matchesResource;
-  });
 
   const handleSelectAll = (checked: boolean) => {
     if (checked) {
-      setSelectedSchedules(filteredSchedules.map((s) => s.id));
+      setSelectedSchedules(schedules.map((s) => s.id));
     } else {
       setSelectedSchedules([]);
     }
@@ -129,25 +149,16 @@ export default function SchedulesClient({
     }
   };
 
-  const exportSchedules = () => {
-    // TODO: Implement export functionality
-    console.log("Exporting schedules...");
-  };
-
-  const refreshSchedules = () => {
-    loadSchedules();
-  };
-
   const handleCreateSchedule = () => {
     router.push("/schedules/create");
   };
 
   // Calculate summary statistics
   const stats = {
-    total: filteredSchedules.length,
-    active: filteredSchedules.filter((s) => s.active).length,
-    inactive: filteredSchedules.filter((s) => !s.active).length,
-    totalSavings: filteredSchedules.reduce(
+    total: schedules.length,
+    active: schedules.filter((s) => s.active).length,
+    inactive: schedules.filter((s) => !s.active).length,
+    totalSavings: schedules.reduce(
       (sum, s) => sum + (s.estimatedSavings || 0),
       0
     ),
@@ -155,7 +166,7 @@ export default function SchedulesClient({
 
   // Handle schedule updates - this will be called by child components
   const handleScheduleUpdated = (message?: string) => {
-    loadSchedules();
+    loadSchedulesWithFilters();
     if (message) {
       toast({
         variant: "success",
@@ -201,7 +212,7 @@ export default function SchedulesClient({
             {error}
             <Button
               variant="link"
-              onClick={loadSchedules}
+              onClick={refreshSchedules}
               className="ml-2 p-0 h-auto"
             >
               Try again
@@ -314,7 +325,6 @@ export default function SchedulesClient({
               Search and filter schedules to find what you need
             </CardDescription>
           </CardHeader>
-          <CardContent>
             <div className="flex flex-col md:flex-row gap-4">
               <div className="flex-1">
                 <Input
@@ -348,6 +358,18 @@ export default function SchedulesClient({
                   ))}
                 </SelectContent>
               </Select>
+              <Button
+                variant="default"
+                onClick={loadSchedulesWithFilters}
+              >
+                Apply Filters
+              </Button>
+              <Button
+                variant="outline"
+                onClick={clearFilters}
+              >
+                Clear Filters
+              </Button>
             </div>
           </CardContent>
         </Card>
@@ -366,7 +388,7 @@ export default function SchedulesClient({
 
           <TabsContent value="table" className="space-y-4">
             <SchedulesTable
-              schedules={filteredSchedules}
+              schedules={schedules}
               selectedSchedules={selectedSchedules}
               onSelectAll={handleSelectAll}
               onSelectSchedule={handleSelectSchedule}
@@ -376,7 +398,7 @@ export default function SchedulesClient({
 
           <TabsContent value="grid" className="space-y-4">
             <SchedulesGrid
-              schedules={filteredSchedules}
+              schedules={schedules}
               selectedSchedules={selectedSchedules}
               onSelectSchedule={handleSelectSchedule}
               onScheduleUpdated={handleScheduleUpdated}
@@ -398,7 +420,7 @@ export default function SchedulesClient({
         onOpenChange={(open) => {
           setImportDialogOpen(open);
           // If dialog is closed, refresh schedules to show any imported ones
-          if (!open) loadSchedules();
+          if (!open) loadSchedulesWithFilters();
         }}
       />
     </div>

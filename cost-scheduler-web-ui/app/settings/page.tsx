@@ -3,6 +3,7 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ThemeSettings } from "@/components/settings/theme-settings"
+import { ProfileForm } from "@/components/settings/profile-form"
 import { Settings, Palette, Bell, Shield, User } from "lucide-react"
 
 export default function SettingsPage() {
@@ -45,7 +46,9 @@ export default function SettingsPage() {
               <CardDescription>Manage your profile information and preferences.</CardDescription>
             </CardHeader>
             <CardContent>
-              <p className="text-muted-foreground">Profile settings will be implemented here.</p>
+              <div className="space-y-6">
+                <ProfileForm />
+              </div>
             </CardContent>
           </Card>
         </TabsContent>

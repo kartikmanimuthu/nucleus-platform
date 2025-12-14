@@ -28,6 +28,7 @@ import {
   Shield,
   Loader2,
   AlertCircle,
+  Upload,
 } from "lucide-react";
 import { AccountsTable } from "@/components/accounts/accounts-table";
 import { AccountsGrid } from "@/components/accounts/accounts-grid";
@@ -38,7 +39,6 @@ import { UIAccount } from "@/lib/types";
 import { useToast } from "@/hooks/use-toast";
 import { useRouter } from "next/navigation";
 import { useIsFirstRender } from "@/hooks/use-first-render";
-import { useDebouncedCallback } from "@/hooks/use-debounce";
 
 interface FilterOption {
   value: string;
@@ -75,7 +75,6 @@ export default function AccountsClient({
 
   // UI state - initialize with server provided values or defaults
   const [searchTerm, setSearchTerm] = useState(initialFilters?.searchTerm || "");
-  const [inputValue, setInputValue] = useState(initialFilters?.searchTerm || "");
   const [statusFilter, setStatusFilter] = useState(initialFilters?.statusFilter || "all");
   const [connectionFilter, setConnectionFilter] = useState(initialFilters?.connectionFilter || "all");
   const [viewMode, setViewMode] = useState<"table" | "grid">("table");
@@ -83,11 +82,6 @@ export default function AccountsClient({
   const [bulkActionsOpen, setBulkActionsOpen] = useState(false);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   
-  // Debounced search term setter
-  
-  const debouncedSetSearchTerm = useDebouncedCallback((value: string) => {
-    setSearchTerm(value);
-  }, 3000);
   const { toast } = useToast();
 
 
@@ -185,68 +179,8 @@ export default function AccountsClient({
   // Track if this is the first render
   const isFirstRender = useIsFirstRender();
 
-  // Update URL and fetch data when filters change
-  useEffect(() => {
-    // Reset pagination when filters change (except on initial load)
-    if (!isFirstRender) {
-        setCurrentPage(0);
-        setPageTokens([undefined]);
-    }
-
-    // Build URL with current filters
-    const url = new URL(window.location.href);
-    
-    // Update or remove search params based on filter values
-    if (searchTerm) {
-      url.searchParams.set('search', searchTerm);
-    } else {
-      url.searchParams.delete('search');
-    }
-    
-    if (statusFilter && statusFilter !== 'all') {
-      url.searchParams.set('status', statusFilter);
-    } else {
-      url.searchParams.delete('status');
-    }
-    
-    if (connectionFilter && connectionFilter !== 'all') {
-      url.searchParams.set('connection', connectionFilter);
-    } else {
-      url.searchParams.delete('connection');
-    }
-    
-    // Update URL without page reload
-    window.history.replaceState({}, '', url.toString());
-    
-    // Load accounts with new filters (skip on initial render if we already have initial data)
-    // Note: Since we reset currentPage to 0, and loadAccountsWithFilters depends on it, 
-    // we need to ensure we don't double trigger or miss trigger.
-    // Actually, setting currentPage(0) will trigger the effect below if we separate it?
-    // No, let's just call load explicitly here? 
-    // Better: Allow the useEffect dependency on currentPage to handle the load?
-    // Current dependency list of loadAccountsWithFilters includes currentPage.
-    // If we change searchTerm, we reset currentPage to 0.
-    // If currentPage was already 0, it won't trigger a change.
-    // So we should call loadAccountsWithFilters() here explicitly to be safe, 
-    // OR ensure that [searchTerm, ...] change triggers it.
-    
-    if (!isFirstRender) {
-       // We need to wait for state update? No, just call with default token (undefined)
-       // actually, the cleaner way is to separate filter change effect from load effect?
-       // Let's keep it simple: Call load directly.
-       
-       // BUT, the useCallback depends on pageTokens. If we just called setPageTokens, it's not updated yet in closure.
-       // So we can't call loadAccountsWithFilters immediately if it relies on state.
-    }
-  }, [searchTerm, statusFilter, connectionFilter, isFirstRender]); 
-  
-  // Separate effect to trigger load when pagination or filters change
-  useEffect(() => {
-      if (!isFirstRender) {
-        loadAccountsWithFilters();
-      }
-  }, [loadAccountsWithFilters, isFirstRender]);
-
+  // Note: Auto-filtering on value change is removed. 
+  // Users must click "Apply Filters" or "Clear Filters" to trigger data refresh.
 
 
   // Use accounts directly since filtering is done server-side
@@ -318,12 +252,16 @@ export default function AccountsClient({
             />
             Refresh
           </Button>
-          <Button onClick={handleCreateAccount}>
-            <Plus className="mr-2 h-4 w-4" />
-            Create Account
-          </Button>
+          <Button onClick={() => setImportDialogOpen(true)} variant="outline">
+              <Upload className="mr-2 h-4 w-4" />
+              Import Accounts
+            </Button>
+            <Button onClick={() => router.push("/accounts/create")}>
+              <Plus className="mr-2 h-4 w-4" />
+              Integrate Account
+            </Button>
+          </div>
         </div>
-      </div>
 
       {/* Error Alert */}
       {error && (
@@ -460,11 +398,8 @@ export default function AccountsClient({
               <div className="flex-1">
                 <Input
                   placeholder="Search accounts by name, ID, description, or creator..."
-                  value={inputValue}
-                  onChange={(e) => {
-                      setInputValue(e.target.value);
-                      debouncedSetSearchTerm(e.target.value);
-                  }}
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
                   className="w-full"
                 />
               </div>
@@ -495,6 +430,29 @@ export default function AccountsClient({
                   ))}
                 </SelectContent>
               </Select>
+              <Button
+                variant="default"
+                onClick={() => {
+                  setCurrentPage(0);
+                  setPageTokens([undefined]);
+                  loadAccountsWithFilters();
+                }}
+              >
+                Apply Filters
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setSearchTerm("");
+                  setStatusFilter("all");
+                  setConnectionFilter("all");
+                  setCurrentPage(0);
+                  setPageTokens([undefined]);
+                  loadAccounts();
+                }}
+              >
+                Clear Filters
+              </Button>
             </div>
           </CardContent>
         </Card>

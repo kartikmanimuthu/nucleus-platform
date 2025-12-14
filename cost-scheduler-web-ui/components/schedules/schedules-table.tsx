@@ -74,7 +74,7 @@ export function SchedulesTable({
   const toggleScheduleStatus = async (schedule: UISchedule) => {
     try {
       setLoadingActions(schedule.id);
-      await ClientScheduleService.toggleScheduleStatus(schedule.name);
+      await ClientScheduleService.toggleScheduleStatus(schedule.id);
       if (onScheduleUpdated) {
         onScheduleUpdated();
       }
@@ -329,7 +329,7 @@ export function SchedulesTable({
                       <DropdownMenuItem
                         onClick={() =>
                           router.push(
-                            `/schedules/${encodeURIComponent(schedule.name)}`
+                            `/schedules/${encodeURIComponent(schedule.id)}`
                           )
                         }
                       >
@@ -340,7 +340,7 @@ export function SchedulesTable({
                         onClick={() =>
                           router.push(
                             `/schedules/${encodeURIComponent(
-                              schedule.name
+                              schedule.id
                             )}/edit`
                           )
                         }

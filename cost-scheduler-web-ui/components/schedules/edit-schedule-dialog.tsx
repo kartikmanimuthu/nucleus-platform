@@ -127,7 +127,7 @@ export function EditScheduleDialog({
 
     try {
       setIsUpdating(true);
-      await ClientScheduleService.updateSchedule(schedule.name, {
+      await ClientScheduleService.updateSchedule(schedule.id, {
         description: formData.description,
         starttime: formData.startTime,
         endtime: formData.endTime,

@@ -107,7 +107,7 @@ export function EditScheduleForm({ schedule }: EditScheduleFormProps) {
       };
 
       // Update the schedule
-      await ClientScheduleService.updateSchedule(schedule.name, updateData);
+      await ClientScheduleService.updateSchedule(schedule.id, updateData);
 
       // Redirect back to schedules list
       router.push("/schedules");

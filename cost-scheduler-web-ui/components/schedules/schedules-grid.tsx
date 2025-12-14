@@ -66,7 +66,7 @@ export function SchedulesGrid({
   const toggleScheduleStatus = async (schedule: UISchedule) => {
     try {
       setLoadingActions(schedule.id);
-      await ClientScheduleService.toggleScheduleStatus(schedule.name);
+      await ClientScheduleService.toggleScheduleStatus(schedule.id);
       if (onScheduleUpdated) {
         onScheduleUpdated();
       }
@@ -99,7 +99,7 @@ export function SchedulesGrid({
 
     try {
       setDeletingSchedule(schedule);
-      await ClientScheduleService.deleteSchedule(schedule.name);
+      await ClientScheduleService.deleteSchedule(schedule.id);
       onScheduleUpdated?.();
       toast({
         variant: "success",
@@ -181,7 +181,7 @@ export function SchedulesGrid({
                     <DropdownMenuItem
                       onClick={() =>
                         router.push(
-                          `/schedules/${encodeURIComponent(schedule.name)}`
+                          `/schedules/${encodeURIComponent(schedule.id)}`
                         )
                       }
                     >
@@ -191,7 +191,7 @@ export function SchedulesGrid({
                     <DropdownMenuItem
                       onClick={() =>
                         router.push(
-                          `/schedules/${encodeURIComponent(schedule.name)}/edit`
+                          `/schedules/${encodeURIComponent(schedule.id)}/edit`
                         )
                       }
                     >

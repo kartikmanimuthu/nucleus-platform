@@ -1,21 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { ScheduleService } from '@/lib/schedule-service';
 
-// POST /api/schedules/[name]/toggle - Toggle schedule active status
+// POST /api/schedules/[scheduleId]/toggle - Toggle schedule active status
 export async function POST(
     request: NextRequest,
-    { params }: { params: { name: string } }
+    { params }: { params: Promise<{ scheduleId: string }> }
 ) {
     try {
-        const scheduleName = decodeURIComponent(params.name);
-        console.log('API Route - Toggling schedule status:', scheduleName);
+        const { scheduleId } = await params;
+        console.log('API Route - Toggling schedule status:', scheduleId);
 
-        const updatedSchedule = await ScheduleService.toggleScheduleStatus(scheduleName);
+        const updatedSchedule = await ScheduleService.toggleScheduleStatus(scheduleId);
 
         return NextResponse.json({
             success: true,
             data: updatedSchedule,
-            message: `Schedule "${scheduleName}" status toggled to ${updatedSchedule.active ? 'active' : 'inactive'}`
+            message: `Schedule status toggled to ${updatedSchedule.active ? 'active' : 'inactive'}`
         });
     } catch (error) {
         console.error('API Route - Error toggling schedule status:', error);

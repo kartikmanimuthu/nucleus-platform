@@ -93,40 +93,82 @@ export class ScheduleService {
      * Get a specific schedule by name (and accountId)
      * PK: TENANT#<tenantId>#ACCOUNT#<accountId>, SK: SCHEDULE#<name>
      */
-    static async getSchedule(name: string, accountId?: string, tenantId: string = DEFAULT_TENANT_ID): Promise<UISchedule | null> {
+    /**
+     * Get a specific schedule by ID or name
+     * If ID provided (UUID format), looks up via GSI3 (Status + ID) or direct GetItem if account known.
+     * If Name provided, looks up via GSI1 query.
+     */
+    static async getSchedule(idOrName: string, accountId?: string, tenantId: string = DEFAULT_TENANT_ID): Promise<UISchedule | null> {
         try {
             const dynamoDBDocumentClient = await getDynamoDBDocumentClient();
+            const isUUID = idOrName.startsWith('sched-');
 
-            // If accountId is provided, use direct GetItem. Otherwise, query GSI1.
-            if (accountId) {
+            // Strategy 1: If accountId is provided, we can try direct GetItem
+            // BUT we must be sure if idOrName is the SK or just Name.
+            // If it's UUID, SK is SCHEDULE#<uuid>. If Name, SK might be SCHEDULE#<name> (legacy) or we can't find it.
+            // We'll assume if accountId is provided and it's a UUID, we use direct GetItem.
+            if (accountId && isUUID) {
                 const command = new GetCommand({
                     TableName: APP_TABLE_NAME,
                     Key: {
                         pk: buildSchedulePK(tenantId, accountId),
-                        sk: buildScheduleSK(name),
+                        sk: buildScheduleSK(idOrName),
                     },
                 });
 
                 const response = await dynamoDBDocumentClient.send(command);
-                return response.Item ? this.transformToUISchedule(response.Item as any) : null;
-            } else {
-                // Fallback: Query GSI1 by schedule name
-                const command = new QueryCommand({
-                    TableName: APP_TABLE_NAME,
-                    IndexName: 'GSI1',
-                    KeyConditionExpression: 'gsi1pk = :pkVal AND gsi1sk = :skVal',
-                    ExpressionAttributeValues: {
-                        ':pkVal': 'TYPE#SCHEDULE',
-                        ':skVal': name
-                    }
-                });
-
-                const response = await dynamoDBDocumentClient.send(command);
-                if (response.Items && response.Items.length > 0) {
-                    return this.transformToUISchedule(response.Items[0] as any);
-                }
-                return null;
+                if (response.Item) return this.transformToUISchedule(response.Item as any);
             }
+
+            // Strategy 2: If UUID but no accountId (or direct get failed/not tried), try GSI3 lookup.
+            // GSI3 PK: STATUS#active or STATUS#inactive
+            // GSI3 SK: TENANT#<tenant>#SCHEDULE#<uuid>
+            if (isUUID) {
+                // We need to check both Active and Inactive states since we don't know the status
+                // This is parallelized for performance
+                const checkStatus = async (status: string) => {
+                    const command = new QueryCommand({
+                        TableName: APP_TABLE_NAME,
+                        IndexName: 'GSI3',
+                        KeyConditionExpression: 'gsi3pk = :gsi3pk AND gsi3sk = :gsi3sk',
+                        ExpressionAttributeValues: {
+                            ':gsi3pk': `STATUS#${status}`,
+                            ':gsi3sk': `TENANT#${tenantId}#SCHEDULE#${idOrName}`
+                        }
+                    });
+                    const response = await dynamoDBDocumentClient.send(command);
+                    return response.Items?.[0];
+                };
+
+                const [activeItem, inactiveItem] = await Promise.all([
+                    checkStatus('active'),
+                    checkStatus('inactive')
+                ]);
+
+                const item = activeItem || inactiveItem;
+                if (item) return this.transformToUISchedule(item as any);
+
+                // If UUID lookup fails, maybe it IS a name that looks like a UUID? unlikely but proceed to GSI1 fallback or return null.
+                if (accountId) return null; // If accountId was provided and direct get failed, we stop.
+            }
+
+            // Strategy 3: Lookup by Name via GSI1 (Legacy or Name-based lookup)
+            const command = new QueryCommand({
+                TableName: APP_TABLE_NAME,
+                IndexName: 'GSI1',
+                KeyConditionExpression: 'gsi1pk = :pkVal AND gsi1sk = :skVal',
+                ExpressionAttributeValues: {
+                    ':pkVal': 'TYPE#SCHEDULE',
+                    ':skVal': idOrName
+                }
+            });
+
+            const response = await dynamoDBDocumentClient.send(command);
+            if (response.Items && response.Items.length > 0) {
+                return this.transformToUISchedule(response.Items[0] as any);
+            }
+
+            return null;
         } catch (error: any) {
             handleDynamoDBError(error, 'getSchedule');
             return null;
@@ -135,7 +177,8 @@ export class ScheduleService {
 
     /**
      * Create a new schedule
-     * PK: TENANT#<tenantId>#ACCOUNT#<accountId>, SK: SCHEDULE#<name>
+     * PK: TENANT#<tenantId>#ACCOUNT#<accountId>, SK: SCHEDULE#<scheduleId>
+     * Note: scheduleId is now a UUID, name is just a display attribute
      */
     static async createSchedule(schedule: Omit<Schedule, 'id'>, tenantId: string = DEFAULT_TENANT_ID): Promise<Schedule> {
         try {
@@ -148,10 +191,13 @@ export class ScheduleService {
                 throw new Error('accountId is required to create a schedule in multi-tenant design');
             }
 
+            // Generate a unique scheduleId (UUID-like)
+            const scheduleId = `sched-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
             const dbSchedule = {
                 // Primary Keys (new hierarchical design)
                 pk: buildSchedulePK(tenantId, schedule.accountId),
-                sk: buildScheduleSK(schedule.name),
+                sk: buildScheduleSK(scheduleId), // Use scheduleId, not name
 
                 // GSI1: TYPE#SCHEDULE -> scheduleName (list all schedules)
                 gsi1pk: 'TYPE#SCHEDULE',
@@ -159,11 +205,11 @@ export class ScheduleService {
 
                 // GSI2: ACCOUNT#<id> -> SCHEDULE#<id> (schedules per account)
                 gsi2pk: `ACCOUNT#${schedule.accountId}`,
-                gsi2sk: `SCHEDULE#${schedule.name}`,
+                gsi2sk: `SCHEDULE#${scheduleId}`,
 
                 // GSI3: STATUS#active/inactive -> TENANT#...#SCHEDULE#...
                 gsi3pk: `STATUS#${statusText}`,
-                gsi3sk: `TENANT#${tenantId}#SCHEDULE#${schedule.name}`,
+                gsi3sk: `TENANT#${tenantId}#SCHEDULE#${scheduleId}`,
 
                 // Entity type
                 type: 'schedule',
@@ -171,7 +217,7 @@ export class ScheduleService {
                 // IDs
                 tenantId: tenantId,
                 accountId: schedule.accountId,
-                scheduleId: schedule.name,
+                scheduleId: scheduleId, // Use generated ID
 
                 // Attributes from schedule
                 name: schedule.name,
@@ -200,7 +246,7 @@ export class ScheduleService {
             await AuditService.logUserAction({
                 action: 'Create Schedule',
                 resourceType: 'schedule',
-                resourceId: schedule.name,
+                resourceId: scheduleId,
                 resourceName: schedule.name,
                 user: 'system',
                 userType: 'user',
@@ -236,9 +282,9 @@ export class ScheduleService {
     /**
      * Update an existing schedule
      */
-    static async updateSchedule(scheduleName: string, updates: Partial<Omit<Schedule, 'name'>>, accountId?: string, tenantId: string = DEFAULT_TENANT_ID): Promise<UISchedule> {
+    static async updateSchedule(scheduleId: string, updates: Partial<Omit<Schedule, 'name'>>, accountId?: string, tenantId: string = DEFAULT_TENANT_ID): Promise<UISchedule> {
         try {
-            const currentSchedule = await this.getSchedule(scheduleName, accountId, tenantId);
+            const currentSchedule = await this.getSchedule(scheduleId, accountId, tenantId);
             if (!currentSchedule) {
                 throw new Error('Schedule not found');
             }
@@ -248,6 +294,10 @@ export class ScheduleService {
             if (!effectiveAccountId) {
                 throw new Error('accountId is required to update a schedule');
             }
+
+            // IMPORTANT: If currentSchedule has a UUID ID, we must use that for SK.
+            // currentSchedule.id comes from transformToUISchedule, which we fixed to prefer UUID.
+            const skValue = currentSchedule.id.startsWith('sched-') ? currentSchedule.id : currentSchedule.name;
 
             const updateExpressions: string[] = [];
             const expressionAttributeNames: Record<string, string> = {};
@@ -280,7 +330,7 @@ export class ScheduleService {
                 TableName: APP_TABLE_NAME,
                 Key: {
                     pk: buildSchedulePK(tenantId, effectiveAccountId),
-                    sk: buildScheduleSK(scheduleName),
+                    sk: buildScheduleSK(skValue),
                 },
                 UpdateExpression: `SET ${updateExpressions.join(', ')}`,
                 ExpressionAttributeNames: expressionAttributeNames,
@@ -295,12 +345,12 @@ export class ScheduleService {
             await AuditService.logUserAction({
                 action: 'Update Schedule',
                 resourceType: 'schedule',
-                resourceId: scheduleName,
-                resourceName: scheduleName,
+                resourceId: scheduleId,
+                resourceName: currentSchedule.name,
                 user: 'system',
                 userType: 'user',
                 status: 'success',
-                details: `Updated schedule "${scheduleName}"`,
+                details: `Updated schedule "${currentSchedule.name}"`,
             });
 
             return updatedSchedule;
@@ -314,26 +364,30 @@ export class ScheduleService {
     /**
      * Delete a schedule
      */
-    static async deleteSchedule(name: string, accountId?: string, tenantId: string = DEFAULT_TENANT_ID): Promise<void> {
+    static async deleteSchedule(idOrName: string, accountId?: string, tenantId: string = DEFAULT_TENANT_ID): Promise<void> {
         try {
             const dynamoDBDocumentClient = await getDynamoDBDocumentClient();
 
-            // Get schedule first to get accountId if not provided
-            let effectiveAccountId = accountId;
-            if (!effectiveAccountId) {
-                const schedule = await this.getSchedule(name, undefined, tenantId);
-                effectiveAccountId = schedule?.accounts?.[0];
+            // Get schedule first to get accountId if not provided AND to resolve correct SK (UUID vs Name)
+            const schedule = await this.getSchedule(idOrName, accountId, tenantId);
+            if (!schedule) {
+                // If not found, nothing to delete.
+                return;
             }
 
+            const effectiveAccountId = accountId || schedule.accounts?.[0];
             if (!effectiveAccountId) {
                 throw new Error('Could not determine accountId for schedule deletion');
             }
+
+            // Resolve proper SK value
+            const skValue = schedule.id.startsWith('sched-') ? schedule.id : schedule.name;
 
             const command = new DeleteCommand({
                 TableName: APP_TABLE_NAME,
                 Key: {
                     pk: buildSchedulePK(tenantId, effectiveAccountId),
-                    sk: buildScheduleSK(name),
+                    sk: buildScheduleSK(skValue),
                 },
             });
 
@@ -342,12 +396,12 @@ export class ScheduleService {
             await AuditService.logUserAction({
                 action: 'Delete Schedule',
                 resourceType: 'schedule',
-                resourceId: name,
-                resourceName: name,
+                resourceId: idOrName,
+                resourceName: schedule.name,
                 user: 'system',
                 userType: 'user',
                 status: 'success',
-                details: `Deleted schedule "${name}"`,
+                details: `Deleted schedule "${schedule.name}"`,
             });
         } catch (error: any) {
             handleDynamoDBError(error, 'deleteSchedule');
@@ -357,15 +411,15 @@ export class ScheduleService {
     /**
      * Toggle schedule active status
      */
-    static async toggleScheduleStatus(name: string, accountId?: string, tenantId: string = DEFAULT_TENANT_ID): Promise<UISchedule> {
+    static async toggleScheduleStatus(idOrName: string, accountId?: string, tenantId: string = DEFAULT_TENANT_ID): Promise<UISchedule> {
         try {
-            const currentSchedule = await this.getSchedule(name, accountId, tenantId);
+            const currentSchedule = await this.getSchedule(idOrName, accountId, tenantId);
             if (!currentSchedule) {
                 throw new Error('Schedule not found');
             }
 
             const effectiveAccountId = accountId || currentSchedule.accounts?.[0];
-            return await this.updateSchedule(name, { active: !currentSchedule.active }, effectiveAccountId, tenantId);
+            return await this.updateSchedule(currentSchedule.id, { active: !currentSchedule.active }, effectiveAccountId, tenantId);
         } catch (error: any) {
             throw error;
         }
@@ -375,8 +429,11 @@ export class ScheduleService {
      * Transform DynamoDB item to UI schedule format
      */
     private static transformToUISchedule(item: any): UISchedule {
+        // Fix: Prioritize scheduleId (UUID) -> SK (without prefix) -> Name 
+        const id = item.scheduleId || (item.sk ? item.sk.replace('SCHEDULE#', '') : undefined) || item.name;
+
         return {
-            id: item.name || item.scheduleId || item.sk?.replace('SCHEDULE#', ''),
+            id: id,
             name: item.name,
             starttime: item.starttime,
             endtime: item.endtime,

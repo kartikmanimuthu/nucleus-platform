@@ -13,6 +13,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
+import { Separator } from "@/components/ui/separator";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -297,59 +298,71 @@ export function AccountsGrid({
                       )}
                   </div>
                 </div>
+                
+                <Separator />
 
-                {/* Connection Status */}
-                <div className="space-y-1">
-                  <div className="text-sm font-medium text-muted-foreground">
-                    Connection Status
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    {getStatusIcon(connectionStatus)}
-                    {getStatusBadge(connectionStatus)}
-                  </div>
-                  {account.connectionError && account.connectionError !== 'None' && (
-                       <p className="text-xs text-red-500 truncate max-w-[250px]" title={account.connectionError}>
-                          {account.connectionError}
-                       </p>
-                  )}
+                {/* Status Columns */}
+                <div className="grid grid-cols-2 gap-4">
+                    {/* Account Status */}
+                    <div className="space-y-2">
+                        <div className="text-sm font-medium text-muted-foreground">
+                            Account Status
+                        </div>
+                        <Badge variant={account.active ? "default" : "secondary"} className={account.active ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-100" : ""}>
+                            {account.active ? "Active" : "Inactive"}
+                        </Badge>
+                    </div>
+
+                    {/* Connection Status */}
+                    <div className="space-y-2">
+                        <div className="text-sm font-medium text-muted-foreground">
+                            Connection
+                        </div>
+                        <div className="flex items-center space-x-2">
+                            {getStatusIcon(connectionStatus)}
+                            {getStatusBadge(connectionStatus)}
+                        </div>
+                        {account.connectionError && account.connectionError !== 'None' && (
+                           <p className="text-xs text-red-500 truncate max-w-[120px]" title={account.connectionError}>
+                              {account.connectionError}
+                           </p>
+                        )}
+                    </div>
                 </div>
               </CardContent>
 
-              <CardFooter className="flex items-center justify-between pt-4 border-t">
-                <div className="flex items-center space-x-2">
-                  <button
-                    className="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 border border-input bg-background hover:bg-accent hover:text-accent-foreground h-8 px-2"
+              <CardFooter className="flex items-center justify-between pt-4 border-t bg-muted/20">
+                <div className="flex items-center space-x-2 w-full">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="flex-1 h-8 text-xs"
                     onClick={() => validateConnection(account.id)}
                     disabled={loadingActions === account.id}
                   >
                     {loadingActions === account.id ? (
-                      <Loader2 className="h-3 w-3 animate-spin" />
+                      <Loader2 className="mr-2 h-3 w-3 animate-spin" />
                     ) : (
-                      <CheckCircle className="h-3 w-3" />
+                      <CheckCircle className="mr-2 h-3 w-3" />
                     )}
-                    <span className="text-xs">Validate</span>
-                  </button>
-                  <button
-                    className="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 border border-input bg-background hover:bg-accent hover:text-accent-foreground h-8 px-2"
+                    Validate
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="flex-1 h-8 text-xs"
                     onClick={() => toggleAccountStatus(account)}
                     disabled={loadingActions === account.id}
                   >
                     {loadingActions === account.id ? (
-                      <Loader2 className="h-3 w-3 animate-spin" />
+                      <Loader2 className="mr-2 h-3 w-3 animate-spin" />
                     ) : account.active ? (
-                      <PowerOff className="h-3 w-3" />
+                      <PowerOff className="mr-2 h-3 w-3" />
                     ) : (
-                      <Power className="h-3 w-3" />
+                      <Power className="mr-2 h-3 w-3" />
                     )}
-                    <span className="text-xs">
-                      {account.active ? "Deactivate" : "Activate"}
-                    </span>
-                  </button>
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  {account.createdAt
-                    ? new Date(account.createdAt).toLocaleDateString()
-                    : "N/A"}
+                    {account.active ? "Deactivate" : "Activate"}
+                  </Button>
                 </div>
               </CardFooter>
             </Card>

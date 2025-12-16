@@ -37,7 +37,13 @@ import {
     CollapsibleContent,
     CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { Save, Loader2, AlertCircle, Copy, Check, ChevronDown, Terminal, Download } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Save, Loader2, AlertCircle, Copy, Check, ChevronDown, Terminal, Download, FileCode, FileJson } from "lucide-react";
 import { ClientAccountService } from "@/lib/client-account-service";
 
 const createAccountSchema = z.object({
@@ -320,37 +326,49 @@ export function CreateAccountForm() {
                             </p>
                         </div>
                         <div className="flex space-x-2">
-                            <Button 
-                                type="button" 
-                                variant="outline"
-                                size="sm"
-                                onClick={() => downloadFile('yaml')}
-                                disabled={!templateYaml}
-                                title="Download CloudFormation Template (YAML)"
-                            >
-                                <Download className="mr-2 h-4 w-4" />
-                                YAML Template
-                            </Button>
-                            <Button 
-                                type="button" 
-                                variant="outline"
-                                size="sm"
-                                onClick={() => downloadFile('json')}
-                                disabled={!template}
-                                title="Download CloudFormation Template (JSON)"
-                            >
-                                <Download className="mr-2 h-4 w-4" />
-                                JSON Template
-                            </Button>
-                            <Button 
-                                type="button" 
-                                variant="secondary"
-                                onClick={generateTemplate}
-                                disabled={generating || !accountId || accountId.length !== 12}
-                            >
-                                {generating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                                {template ? "Regenerate Template" : "Generate Template"}
-                            </Button>
+                             {!template ? (
+                                <Button 
+                                    type="button" 
+                                    onClick={generateTemplate}
+                                    disabled={generating || !accountId || accountId.length !== 12}
+                                >
+                                    {generating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                                    Generate Template
+                                </Button>
+                             ) : (
+                                <>
+                                    <Button 
+                                        type="button" 
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={generateTemplate}
+                                        disabled={generating}
+                                    >
+                                        {generating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Terminal className="mr-2 h-4 w-4" />}
+                                        Regenerate
+                                    </Button>
+
+                                    <DropdownMenu>
+                                        <DropdownMenuTrigger asChild>
+                                            <Button variant="default" size="sm">
+                                                <Download className="mr-2 h-4 w-4" />
+                                                Download
+                                                <ChevronDown className="ml-2 h-3 w-3 opacity-50" />
+                                            </Button>
+                                        </DropdownMenuTrigger>
+                                        <DropdownMenuContent align="end">
+                                            <DropdownMenuItem onClick={() => downloadFile('yaml')}>
+                                                <FileCode className="mr-2 h-4 w-4" />
+                                                <span>YAML Template</span>
+                                            </DropdownMenuItem>
+                                            <DropdownMenuItem onClick={() => downloadFile('json')}>
+                                                <FileJson className="mr-2 h-4 w-4" />
+                                                <span>JSON Template</span>
+                                            </DropdownMenuItem>
+                                        </DropdownMenuContent>
+                                    </DropdownMenu>
+                                </>
+                             )}
                         </div>
                     </div>
 

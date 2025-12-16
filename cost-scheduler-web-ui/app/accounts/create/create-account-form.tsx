@@ -130,14 +130,15 @@ export function CreateAccountForm() {
       
       setIsTemplateOpen(true);
 
-      if (data.externalId) {
-          form.setValue("externalId", data.externalId);
+          if (data.externalId) {
+             form.setValue("externalId", data.externalId);
           
-          const suggestedRoleArn = `arn:aws:iam::${accountId}:role/NucleusCrossAccountCheckRole`; 
-          if (!form.getValues("roleArn")) {
-              form.setValue("roleArn", suggestedRoleArn);
+             // Update suggested Role name to match shortened CloudFormation template
+             const suggestedRoleArn = `arn:aws:iam::${accountId}:role/NucleusAccess-${hubAccountId}`; 
+             if (!form.getValues("roleArn")) {
+               form.setValue("roleArn", suggestedRoleArn);
+             }
           }
-      }
     } catch (error) {
       console.error("Error generating template:", error);
       alert("Failed to generate template.");
@@ -423,7 +424,7 @@ export function CreateAccountForm() {
                     <FormControl>
                         <Input
                         {...field}
-                        placeholder="arn:aws:iam::123456789012:role/NucleusCrossAccountRole"
+                        placeholder="arn:aws:iam::123456789012:role/NucleusAccess-044656767899"
                         />
                     </FormControl>
                     <FormDescription>

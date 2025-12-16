@@ -31,8 +31,8 @@ import {
 
 const navigation = [
   { name: "Dashboard", href: "/", icon: LayoutDashboard },
-  { name: "Schedules", href: "/schedules", icon: Calendar },
   { name: "AWS Accounts", href: "/accounts", icon: Server },
+  { name: "Schedules", href: "/schedules", icon: Calendar },
   { name: "Audit Logs", href: "/audit", icon: Activity },
   { name: "Settings", href: "/settings", icon: Settings },
 ]

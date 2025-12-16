@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { ScheduleService } from '@/lib/schedule-service';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '../../../auth/[...nextauth]/route';
 
 // POST /api/schedules/[scheduleId]/toggle - Toggle schedule active status
 export async function POST(
@@ -10,7 +12,10 @@ export async function POST(
         const { scheduleId } = await params;
         console.log('API Route - Toggling schedule status:', scheduleId);
 
-        const updatedSchedule = await ScheduleService.toggleScheduleStatus(scheduleId);
+        const session = await getServerSession(authOptions);
+        const updatedBy = session?.user?.email || 'api-user';
+
+        const updatedSchedule = await ScheduleService.toggleScheduleStatus(scheduleId, undefined, updatedBy);
 
         return NextResponse.json({
             success: true,

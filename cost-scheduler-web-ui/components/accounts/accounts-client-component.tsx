@@ -252,10 +252,10 @@ export default function AccountsClient({
             />
             Refresh
           </Button>
-          <Button onClick={() => setImportDialogOpen(true)} variant="outline">
+          {/* <Button onClick={() => setImportDialogOpen(true)} variant="outline">
               <Upload className="mr-2 h-4 w-4" />
               Import Accounts
-            </Button>
+            </Button> */}
             <Button onClick={() => router.push("/accounts/create")}>
               <Plus className="mr-2 h-4 w-4" />
               Integrate Account

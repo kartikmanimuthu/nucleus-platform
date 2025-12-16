@@ -468,6 +468,7 @@ export function EditAccountForm({ account }: EditAccountFormProps) {
                             onChange={(e) =>
                                 setFormData((prev) => ({ ...prev, roleArn: e.target.value }))
                             }
+                            placeholder="arn:aws:iam::123456789012:role/NucleusAccess-044656767899"
                         />
                          <p className="text-[0.8rem] text-muted-foreground">
                             Stack Output: 'RoleArn'

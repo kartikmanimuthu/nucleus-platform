@@ -1,7 +1,7 @@
 
 export const generateOnboardingTemplate = (hubAccountId: string, externalId: string, accountId?: string, accountName?: string) => {
-    const sanitizedAccountName = accountName ? accountName.replace(/[^a-zA-Z0-9]/g, '') : '';
-    const defaultRoleName = `Nucleus${hubAccountId}CrossAccountAccess${accountId || ''}${sanitizedAccountName}IntegrationRole`;
+    // Shortened to satisfy AWS IAM 64-character limit
+    const defaultRoleName = `NucleusAccess-${hubAccountId}`;
 
     return {
         AWSTemplateFormatVersion: "2010-09-09",
@@ -88,8 +88,8 @@ export const generateOnboardingTemplate = (hubAccountId: string, externalId: str
 };
 
 export const generateOnboardingYaml = (hubAccountId: string, externalId: string, accountId?: string, accountName?: string) => {
-    const sanitizedAccountName = accountName ? accountName.replace(/[^a-zA-Z0-9]/g, '') : '';
-    const defaultRoleName = `Nucleus${hubAccountId}CrossAccountAccess${accountId || ''}${sanitizedAccountName}IntegrationRole`;
+    // Shortened to satisfy AWS IAM 64-character limit
+    const defaultRoleName = `NucleusAccess-${hubAccountId}`;
 
     return `AWSTemplateFormatVersion: '2010-09-09'
 Description: Nucleus Platform - Cross Account Role for Cost Optimization Scheduler

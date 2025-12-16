@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { ScheduleService } from '@/lib/schedule-service';
 import { AuditService } from '@/lib/audit-service';
 import { Schedule, UISchedule } from '@/lib/types';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '../auth/[...nextauth]/route';
 
 // GET /api/schedules - Get all schedules with optional filtering
 export async function GET(request: NextRequest) {
@@ -54,6 +56,9 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
     try {
         console.log('API - Creating new schedule');
+
+        const session = await getServerSession(authOptions);
+        const createdBy = session?.user?.email || 'api-user';
 
         const body = await request.json();
 
@@ -109,6 +114,8 @@ export async function POST(request: NextRequest) {
         const schedule = await ScheduleService.createSchedule({
             ...body,
             active: body.active !== undefined ? body.active : true, // Default to active
+            createdBy,
+            updatedBy: createdBy
         });
 
         // Log audit event
@@ -117,7 +124,7 @@ export async function POST(request: NextRequest) {
             resourceType: 'schedule',
             resourceId: schedule.name,
             resourceName: schedule.name,
-            user: 'system', // This would be passed from the client in a real implementation
+            user: createdBy, // This would be passed from the client in a real implementation
             userType: 'user',
             status: 'success',
             details: `Created schedule "${schedule.name}"`,

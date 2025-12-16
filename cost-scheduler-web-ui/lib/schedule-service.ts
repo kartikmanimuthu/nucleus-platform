@@ -261,7 +261,7 @@ export class ScheduleService {
                 resourceType: 'schedule',
                 resourceId: scheduleId,
                 resourceName: schedule.name,
-                user: 'system',
+                user: schedule.createdBy || 'system',
                 userType: 'user',
                 status: 'success',
                 details: `Created schedule "${schedule.name}" with ${schedule.days.join(', ')} from ${schedule.starttime} to ${schedule.endtime}`,
@@ -360,7 +360,7 @@ export class ScheduleService {
                 resourceType: 'schedule',
                 resourceId: scheduleId,
                 resourceName: currentSchedule.name,
-                user: 'system',
+                user: updates.updatedBy || 'system',
                 userType: 'user',
                 status: 'success',
                 details: `Updated schedule "${currentSchedule.name}"`,
@@ -377,7 +377,7 @@ export class ScheduleService {
     /**
      * Delete a schedule
      */
-    static async deleteSchedule(idOrName: string, accountId?: string, tenantId: string = DEFAULT_TENANT_ID): Promise<void> {
+    static async deleteSchedule(idOrName: string, accountId?: string, deletedBy: string = 'system', tenantId: string = DEFAULT_TENANT_ID): Promise<void> {
         try {
             const dynamoDBDocumentClient = await getDynamoDBDocumentClient();
 
@@ -411,7 +411,7 @@ export class ScheduleService {
                 resourceType: 'schedule',
                 resourceId: idOrName,
                 resourceName: schedule.name,
-                user: 'system',
+                user: deletedBy,
                 userType: 'user',
                 status: 'success',
                 details: `Deleted schedule "${schedule.name}"`,
@@ -424,7 +424,7 @@ export class ScheduleService {
     /**
      * Toggle schedule active status
      */
-    static async toggleScheduleStatus(idOrName: string, accountId?: string, tenantId: string = DEFAULT_TENANT_ID): Promise<UISchedule> {
+    static async toggleScheduleStatus(idOrName: string, accountId?: string, updatedBy: string = 'system', tenantId: string = DEFAULT_TENANT_ID): Promise<UISchedule> {
         try {
             const currentSchedule = await this.getSchedule(idOrName, accountId, tenantId);
             if (!currentSchedule) {
@@ -432,7 +432,7 @@ export class ScheduleService {
             }
 
             const effectiveAccountId = accountId || currentSchedule.accounts?.[0];
-            return await this.updateSchedule(currentSchedule.id, { active: !currentSchedule.active }, effectiveAccountId, tenantId);
+            return await this.updateSchedule(currentSchedule.id, { active: !currentSchedule.active, updatedBy }, effectiveAccountId, tenantId);
         } catch (error: any) {
             throw error;
         }

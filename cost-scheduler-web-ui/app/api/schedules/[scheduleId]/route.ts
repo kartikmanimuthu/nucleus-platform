@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { ScheduleService } from '@/lib/schedule-service';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '../../auth/[...nextauth]/route';
 
 // GET /api/schedules/[scheduleId] - Get a specific schedule by ID
 export async function GET(
@@ -40,10 +42,13 @@ export async function PUT(
 ) {
     try {
         const { scheduleId } = await params;
+        const session = await getServerSession(authOptions);
+        const updatedBy = session?.user?.email || 'api-user';
+
         const body = await request.json();
 
         // ... validation ...
-        const updateData = { ...body, id: scheduleId };
+        const updateData = { ...body, id: scheduleId, updatedBy };
 
         // ... update logic ...
         const updatedSchedule = await ScheduleService.updateSchedule(scheduleId, updateData);
@@ -65,8 +70,10 @@ export async function DELETE(
 ) {
     try {
         const { scheduleId } = await params;
+        const session = await getServerSession(authOptions);
+        const deletedBy = session?.user?.email || 'api-user';
 
-        await ScheduleService.deleteSchedule(scheduleId);
+        await ScheduleService.deleteSchedule(scheduleId, undefined, deletedBy);
 
         return NextResponse.json({ success: true });
     } catch (error) {

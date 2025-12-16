@@ -64,7 +64,7 @@ export default async function AuditPage({ searchParams }: { searchParams: Search
 
   return (
     <AuditClient 
-      logsResponse={logsResponse} 
+      logsResponse={logsResponse.logs} 
       statsResponse={statsResponse}
       mappedStats={mappedStats}
       initialFilters={initialFilters}

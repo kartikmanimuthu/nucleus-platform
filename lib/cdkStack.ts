@@ -84,6 +84,20 @@ export class CdkStack extends cdk.Stack {
       sortKey: { name: 'gsi1sk', type: dynamodb.AttributeType.STRING },
     });
 
+    // Add GSI2: USER#<user_id> -> timestamp (Filter by User)
+    auditTable.addGlobalSecondaryIndex({
+      indexName: 'GSI2',
+      partitionKey: { name: 'gsi2pk', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'gsi2sk', type: dynamodb.AttributeType.STRING },
+    });
+
+    // Add GSI3: EVENT#<event_type> -> timestamp (Filter by Event Type)
+    auditTable.addGlobalSecondaryIndex({
+      indexName: 'GSI3',
+      partitionKey: { name: 'gsi3pk', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'gsi3sk', type: dynamodb.AttributeType.STRING },
+    });
+
     // IAM Policy for Lambda
     const lambdaPolicy = new iam.Policy(this, 'LambdaPolicy', {
       policyName: `${stackName}-lambda-policy`,

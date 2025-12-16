@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { useSession } from "next-auth/react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,6 +27,7 @@ import {
   Check,
   ChevronDown,
   Terminal,
+  Download,
 } from "lucide-react";
 import { UIAccount } from "@/lib/types";
 import { useToast } from "@/hooks/use-toast";
@@ -50,6 +52,7 @@ interface EditAccountFormProps {
 }
 
 export function EditAccountForm({ account }: EditAccountFormProps) {
+  const { data: session } = useSession();
   const router = useRouter();
   const { toast } = useToast();
   const [formData, setFormData] = useState({
@@ -72,6 +75,7 @@ export function EditAccountForm({ account }: EditAccountFormProps) {
   // Template state
   const [generating, setGenerating] = useState(false);
   const [template, setTemplate] = useState<string | null>(null);
+  const [templateYaml, setTemplateYaml] = useState<string | null>(null); 
   const [isTemplateOpen, setIsTemplateOpen] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -104,6 +108,7 @@ export function EditAccountForm({ account }: EditAccountFormProps) {
         description: formData.description,
         regions: formData.regions,
         active: formData.active,
+        updatedBy: session?.user?.email || "web-ui-user",
       });
 
       toast({
@@ -210,6 +215,7 @@ export function EditAccountForm({ account }: EditAccountFormProps) {
       }
 
       setTemplate(JSON.stringify(data.template, null, 2));
+      if (data.templateYaml) setTemplateYaml(data.templateYaml);
       setIsTemplateOpen(true);
       
     } catch (error: any) {
@@ -233,6 +239,35 @@ export function EditAccountForm({ account }: EditAccountFormProps) {
       });
       setTimeout(() => setCopied(false), 2000);
     }
+  };
+
+  const downloadFile = (format: 'yaml' | 'json') => {
+      const fileName = `${formData.accountId || 'nucleus'}_${formData.name?.replace(/\s+/g, '_') || 'integration'}.${format}`;
+      let content = '';
+      let type = '';
+
+      if (format === 'json') {
+          content = template || ''; // Already stringified
+          type = 'application/json';
+      } else {
+          content = templateYaml || '';
+          type = 'text/yaml';
+      }
+
+      if (!content) {
+          toast({ variant: "destructive", title: "Generate Template", description: "Please generate the template first." });
+          return;
+      }
+
+      const blob = new Blob([content], { type });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
   };
 
   return (
@@ -331,6 +366,29 @@ export function EditAccountForm({ account }: EditAccountFormProps) {
                                     Generate the template to deploy in the account {formData.accountId ? `(${formData.accountId})` : ''}
                                 </p>
                             </div>
+                        <div className="flex space-x-2">
+                            <Button 
+                                type="button" 
+                                variant="outline"
+                                size="sm"
+                                onClick={() => downloadFile('yaml')}
+                                disabled={!templateYaml}
+                                title="Download CloudFormation Template (YAML)"
+                            >
+                                <Download className="mr-2 h-4 w-4" />
+                                YAML Template
+                            </Button>
+                            <Button 
+                                type="button" 
+                                variant="outline"
+                                size="sm"
+                                onClick={() => downloadFile('json')}
+                                disabled={!template}
+                                title="Download CloudFormation Template (JSON)"
+                            >
+                                <Download className="mr-2 h-4 w-4" />
+                                JSON Template
+                            </Button>
                             <Button 
                                 type="button" 
                                 variant="secondary"
@@ -340,6 +398,7 @@ export function EditAccountForm({ account }: EditAccountFormProps) {
                                 {generating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                                 {template ? "Regenerate Template" : "Generate Template"}
                             </Button>
+                        </div>
                         </div>
 
                         {template && (

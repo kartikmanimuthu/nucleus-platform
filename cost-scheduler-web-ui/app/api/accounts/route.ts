@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { AccountService } from '@/lib/account-service';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '../auth/[...nextauth]/route';
 
 export async function GET(request: NextRequest) {
     try {
@@ -41,10 +43,17 @@ export async function POST(request: NextRequest) {
     try {
         console.log('API - POST /api/accounts - Creating account');
 
-        const accountData = await request.json();
-        console.log('API - Account data:', accountData);
+        const session = await getServerSession(authOptions);
+        const createdBy = session?.user?.email || 'api-user';
 
-        await AccountService.createAccount(accountData);
+        const accountData = await request.json();
+        console.log('API - Account data:', accountData, 'User:', createdBy);
+
+        await AccountService.createAccount({
+            ...accountData,
+            createdBy: accountData.createdBy || createdBy,
+            updatedBy: accountData.updatedBy || createdBy
+        });
 
         console.log('API - Successfully created account');
         return NextResponse.json({

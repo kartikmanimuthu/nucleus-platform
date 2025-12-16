@@ -13,6 +13,12 @@ export interface AuditLogFilters {
     correlationId?: string;
     searchTerm?: string;
     limit?: number;
+    nextPageToken?: string;
+}
+
+export interface AuditLogResponse {
+    logs: AuditLog[];
+    nextPageToken?: string;
 }
 
 export interface AuditLogStats {
@@ -48,7 +54,7 @@ export class ClientAuditService {
                 }
             });
 
-            const url = queryParams.toString() 
+            const url = queryParams.toString()
                 ? `${this.baseUrl}?${queryParams.toString()}`
                 : this.baseUrl;
 
@@ -92,7 +98,7 @@ export class ClientAuditService {
                 }
             });
 
-            const url = queryParams.toString() 
+            const url = queryParams.toString()
                 ? `${this.statsUrl}?${queryParams.toString()}`
                 : this.statsUrl;
 

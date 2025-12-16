@@ -48,12 +48,11 @@ type ProfileFormValues = z.infer<typeof profileFormSchema>
 
 // This can come from your database or API.
 const defaultValues: Partial<ProfileFormValues> = {
-  bio: "I'm a software engineer based in San Francisco. I love building things for the web.",
-  urls: [
-    { value: "https://shadcn.com" },
-    { value: "http://twitter.com/shadcn" },
-  ],
-  role: "Default Role",
+  username: "",
+  email: "",
+  bio: "",
+  urls: [],
+  role: "",
 }
 
 export function ProfileForm() {
@@ -69,8 +68,11 @@ export function ProfileForm() {
     if (session?.user) {
         form.setValue("username", session.user.name || "")
         form.setValue("email", session.user.email || "")
-        // Keep role as default for now as requested
-        form.setValue("role", "Default Role") 
+        
+        // Derive role from groups or default
+        const groups = session.user.groups || [];
+        const role = groups.length > 0 ? groups[0] : "Default Role";
+        form.setValue("role", role)
     }
   }, [session, form])
 
@@ -95,11 +97,10 @@ export function ProfileForm() {
             <FormItem>
               <FormLabel>Username</FormLabel>
               <FormControl>
-                <Input placeholder="shadcn" {...field} />
+                <Input placeholder="Your username" {...field} />
               </FormControl>
               <FormDescription>
-                This is your public display name. It can be your real name or a
-                pseudonym.
+                This is your public display name.
               </FormDescription>
               <FormMessage />
             </FormItem>
@@ -112,10 +113,10 @@ export function ProfileForm() {
             <FormItem>
               <FormLabel>Email</FormLabel>
               <FormControl>
-                <Input placeholder="Select a verified email to display" {...field} disabled />
+                <Input placeholder="Your email" {...field} disabled />
               </FormControl>
               <FormDescription>
-                You can manage verified email addresses in your <a href="/examples/forms">email settings</a>.
+                Managed by your identity provider.
               </FormDescription>
               <FormMessage />
             </FormItem>
@@ -131,12 +132,26 @@ export function ProfileForm() {
                         <Input {...field} disabled />
                     </FormControl>
                     <FormDescription>
-                        Your current role in the organization.
+                        Your assigned role in the organization.
                     </FormDescription>
                     <FormMessage />
                 </FormItem>
             )}
         />
+        
+        {session?.user?.groups && session.user.groups.length > 0 && (
+             <div className="rounded-md bg-muted p-4">
+                <h4 className="text-sm font-medium mb-2">Account Groups</h4>
+                <div className="flex flex-wrap gap-2">
+                    {session.user.groups.map((group: string) => (
+                        <span key={group} className="inline-flex items-center rounded-md bg-primary/10 px-2 py-1 text-xs font-medium text-primary ring-1 ring-inset ring-primary/20">
+                            {group}
+                        </span>
+                    ))}
+                </div>
+             </div>
+        )}
+
         <FormField
           control={form.control}
           name="bio"
@@ -150,10 +165,6 @@ export function ProfileForm() {
                   {...field}
                 />
               </FormControl>
-              <FormDescription>
-                You can <span>@mention</span> other users and organizations to
-                link to them.
-              </FormDescription>
               <FormMessage />
             </FormItem>
           )}

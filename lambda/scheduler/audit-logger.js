@@ -14,10 +14,26 @@ class LambdaAuditLogger {
      * Create an audit log entry in DynamoDB
      */
     async createAuditLog(auditData) {
+        const timestamp = new Date().toISOString();
+        // TTL: 90 days from now
+        const expireAt = Math.floor(Date.now() / 1000) + (90 * 24 * 60 * 60);
+
+        const user = auditData.user || 'system';
+        const eventType = auditData.eventType || 'unknown';
+
         const auditLog = {
+            pk: `LOG#${`audit-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`}`,
+            sk: timestamp,
+            gsi1pk: 'TYPE#LOG',
+            gsi1sk: timestamp,
+            gsi2pk: `USER#${user}`,
+            gsi2sk: timestamp,
+            gsi3pk: `EVENT#${eventType}`,
+            gsi3sk: timestamp,
+            expire_at: expireAt,
             id: `audit-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
             type: 'audit_log',
-            timestamp: new Date().toISOString(),
+            timestamp: timestamp,
             ...auditData,
         };
 

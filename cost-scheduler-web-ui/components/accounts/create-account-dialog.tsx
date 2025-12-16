@@ -20,7 +20,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Server, Globe, CheckCircle, Loader2 } from "lucide-react";
+import { Server, Globe, CheckCircle, Loader2, Shield } from "lucide-react";
 import { ClientAccountService } from "@/lib/client-account-service";
 import { useToast } from "@/hooks/use-toast";
 
@@ -409,6 +409,60 @@ export function CreateAccountDialog({
               )}
             </CardContent>
           </Card>
+
+            {/* Setup Instructions Section */}
+            <Card className="bg-muted/50 border-dashed">
+                <CardHeader className="pb-2">
+                    <CardTitle className="text-sm font-medium flex items-center">
+                        <Shield className="h-4 w-4 mr-2" />
+                        Prerequisites: Cross-Account Role
+                    </CardTitle>
+                </CardHeader>
+                <CardContent className="text-sm text-muted-foreground space-y-3">
+                    <p>
+                        To allow Nucleus to manage costs, you must create an IAM role in the target account.
+                        Download the CloudFormation template below and deploy it in the target account.
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                        <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            className="h-8"
+                            onClick={() => {
+                                const fileName = `${formData.accountId || 'nucleus'}_${formData.name?.replace(/\s+/g, '_') || 'integration'}.yaml`;
+                                const link = document.createElement('a');
+                                link.href = '/templates/nucleus-account-integration.yaml';
+                                link.download = fileName;
+                                document.body.appendChild(link);
+                                link.click();
+                                document.body.removeChild(link);
+                            }}
+                        >
+                            <Server className="h-3 w-3 mr-2" />
+                            Download YAML
+                        </Button>
+                        <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            className="h-8"
+                            onClick={() => {
+                                const fileName = `${formData.accountId || 'nucleus'}_${formData.name?.replace(/\s+/g, '_') || 'integration'}.json`;
+                                const link = document.createElement('a');
+                                link.href = '/templates/nucleus-account-integration.json';
+                                link.download = fileName;
+                                document.body.appendChild(link);
+                                link.click();
+                                document.body.removeChild(link);
+                            }}
+                        >
+                            <Server className="h-3 w-3 mr-2" />
+                            Download JSON
+                        </Button>
+                    </div>
+                </CardContent>
+            </Card>
 
           <DialogFooter>
             <Button

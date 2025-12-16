@@ -97,8 +97,10 @@ export default function AuditClientAPI({
       to: new Date(),
     };
   });
+
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+  const [nextPageToken, setNextPageToken] = useState<string | undefined>(undefined);
   const router = useRouter();
 
   // Get unique users from logs for the user filter dropdown
@@ -112,7 +114,7 @@ export default function AuditClientAPI({
   );
 
   // Fetch audit logs and stats
-  const fetchAuditData = async () => {
+  const fetchAuditData = async (loadMore = false) => {
     try {
       setLoading(true);
       setError(null);
@@ -126,25 +128,50 @@ export default function AuditClientAPI({
       if (dateRange?.to) filters.endDate = dateRange.to.toISOString();
       if (searchTerm) filters.searchTerm = searchTerm;
 
-      // Fetch logs and stats in parallel
-      const [logsResponse, statsResponse] = await Promise.all([
-        ClientAuditService.getAuditLogs(filters),
-        ClientAuditService.getAuditLogStats(filters),
-      ]);
+      // Logic for pagination
+      if (loadMore && nextPageToken) {
+          filters.nextPageToken = nextPageToken;
+      }
 
-      setAuditLogs(logsResponse);
-      setStats({
-        totalLogs: statsResponse.totalLogs,
-        errorCount: statsResponse.errorCount,
-        warningCount: statsResponse.warningCount,
-        successCount: statsResponse.successCount,
-      });
+      // Fetch logs and stats in parallel (only fetch stats on initial load to save resources)
+      const promises: [Promise<any>, Promise<any>?] = [
+        ClientAuditService.getAuditLogs(filters),
+      ];
+      
+      if (!loadMore) {
+          promises.push(ClientAuditService.getAuditLogStats(filters));
+      }
+
+      const [logsResponse, statsResponse] = await Promise.all(promises);
+
+      if (loadMore) {
+          setAuditLogs(prev => [...prev, ...logsResponse.logs]);
+          setNextPageToken(logsResponse.nextPageToken);
+      } else {
+          setAuditLogs(logsResponse.logs);
+          setNextPageToken(logsResponse.nextPageToken);
+          if (statsResponse) {
+              setStats({
+                totalLogs: statsResponse.totalLogs,
+                errorCount: statsResponse.errorCount,
+                warningCount: statsResponse.warningCount,
+                successCount: statsResponse.successCount,
+              });
+          }
+      }
+
     } catch (err) {
       console.error("Error fetching audit data:", err);
       setError(err instanceof Error ? err.message : "Failed to fetch audit data");
     } finally {
       setLoading(false);
     }
+  };
+
+  const loadMoreLogs = () => {
+      if (!loading && nextPageToken) {
+          fetchAuditData(true);
+      }
   };
 
   // Handle refresh
@@ -422,11 +449,11 @@ export default function AuditClientAPI({
             <CardHeader>
               <CardTitle>Audit Log Entries</CardTitle>
               <CardDescription>
-                {filteredLogs.length} of {auditLogs.length} total entries
+                {filteredLogs.length} entries shown
               </CardDescription>
             </CardHeader>
             <CardContent>
-              {loading ? (
+              {loading && !nextPageToken ? (
                 <div className="flex justify-center items-center h-32">
                   <Loader2 className="h-8 w-8 animate-spin" />
                 </div>
@@ -435,7 +462,27 @@ export default function AuditClientAPI({
                   Error: {error}
                 </div>
               ) : (
-                <AuditLogsTable logs={filteredLogs} />
+                <>
+                  <AuditLogsTable logs={filteredLogs} />
+                  {nextPageToken && (
+                      <div className="flex justify-center mt-4 p-4 border-t">
+                          <Button 
+                              variant="outline" 
+                              onClick={loadMoreLogs}
+                              disabled={loading}
+                          >
+                              {loading ? (
+                                  <>
+                                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                      Loading...
+                                  </>
+                              ) : (
+                                  "Load More Logs"
+                              )}
+                          </Button>
+                      </div>
+                  )}
+                </>
               )}
             </CardContent>
           </Card>

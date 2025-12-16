@@ -21,15 +21,17 @@ export async function GET(request: NextRequest) {
         if (searchParams.get('user')) filters.user = searchParams.get('user')!;
         if (searchParams.get('correlationId')) filters.correlationId = searchParams.get('correlationId')!;
         if (searchParams.get('limit')) filters.limit = parseInt(searchParams.get('limit')!);
+        if (searchParams.get('nextPageToken')) filters.nextPageToken = searchParams.get('nextPageToken')!;
 
         console.log('API - Fetching audit logs with filters:', filters);
 
-        const auditLogs = await AuditService.getAuditLogs(filters);
+        const { logs, nextPageToken } = await AuditService.getAuditLogs(filters);
 
         return NextResponse.json({
             success: true,
-            data: auditLogs,
-            count: auditLogs.length,
+            data: logs,
+            nextPageToken,
+            count: logs.length,
         });
     } catch (error: unknown) {
         console.error('API - Error fetching audit logs:', error);

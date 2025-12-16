@@ -15,6 +15,12 @@ export interface AuditLogFilters {
     correlationId?: string;
     searchTerm?: string;
     limit?: number;
+    nextPageToken?: string;
+}
+
+export interface AuditLogResponse {
+    logs: AuditLog[];
+    nextPageToken?: string;
 }
 
 export interface AuditLogStats {
@@ -62,11 +68,20 @@ export class AuditService {
             // TTL: 90 days from now
             const expireAt = Math.floor(Date.now() / 1000) + (90 * 24 * 60 * 60);
 
+            // Determine GSI keys
+            const user = cleanedAuditData.user || 'system';
+            // Ensure eventType is cleaner for GSI
+            const eventType = cleanedAuditData.eventType || 'unknown';
+
             const auditLogItem = {
                 pk: `LOG#${auditId}`,
                 sk: timestamp,
                 gsi1pk: 'TYPE#LOG',
                 gsi1sk: timestamp,
+                gsi2pk: `USER#${user}`, // GSI2: Filter by User
+                gsi2sk: timestamp,
+                gsi3pk: `EVENT#${eventType}`, // GSI3: Filter by Event Type
+                gsi3sk: timestamp,
                 expire_at: expireAt,
 
                 // Attributes
@@ -89,66 +104,104 @@ export class AuditService {
     }
 
     /**
-     * Fetch audit logs with optional filters
+     * Fetch audit logs with optional filters and pagination
      */
-    static async getAuditLogs(filters?: AuditLogFilters): Promise<AuditLog[]> {
+    static async getAuditLogs(filters?: AuditLogFilters): Promise<AuditLogResponse> {
         try {
             console.log('AuditService - Fetching audit logs with filters:', filters);
 
             let command;
-            const limit = filters?.limit || 1000;
+            const limit = filters?.limit || 20;
+            const startKey = filters?.nextPageToken ? JSON.parse(Buffer.from(filters.nextPageToken, 'base64').toString('utf-8')) : undefined;
 
-            // Use GSI1 for time-based queries if possible, otherwise Scan
-            if (filters?.startDate && !filters?.endDate) {
-                // Query GSI1: pk=TYPE#LOG and sk >= startDate
+            // Strategy: Use specialized GSIs if specific filters are present, otherwise GSI1 (Global Time-based)
+
+            // Case 1: Filter by User (GSI2)
+            // USER#<user> -> timestamp
+            if (filters?.user && filters.user !== 'all') {
                 command = new QueryCommand({
                     TableName: AUDIT_TABLE_NAME,
-                    IndexName: 'GSI1',
-                    KeyConditionExpression: 'gsi1pk = :pkVal AND gsi1sk >= :startDate',
+                    IndexName: 'GSI2',
+                    KeyConditionExpression: filters.startDate && filters.endDate
+                        ? 'gsi2pk = :pkVal AND gsi2sk BETWEEN :startDate AND :endDate'
+                        : 'gsi2pk = :pkVal AND gsi2sk <= :endDate',
+
                     ExpressionAttributeValues: {
-                        ':pkVal': 'TYPE#LOG',
-                        ':startDate': filters.startDate
+                        ':pkVal': `USER#${filters.user}`,
+                        ':endDate': filters.endDate || new Date().toISOString(),
+                        ...(filters.startDate && filters.endDate ? { ':startDate': filters.startDate } : {})
                     },
-                    ScanIndexForward: false, // Descending by timestamp
-                    Limit: limit
+                    ScanIndexForward: false, // Descending (Newest first)
+                    Limit: limit,
+                    ExclusiveStartKey: startKey
                 });
-            } else if (filters?.startDate && filters?.endDate) {
+            }
+            // Case 2: Filter by EventType (GSI3)
+            // EVENT#<eventType> -> timestamp
+            else if (filters?.eventType && filters.eventType !== 'all') {
+
+                // Note: eventType in dropdown might be simple, but stored as 'resource.action'.
+                // We need to ensure exact match or partial. GSI is exact match on PK.
+                // Assuming the UI passes exact eventType string used in creation.
                 command = new QueryCommand({
                     TableName: AUDIT_TABLE_NAME,
-                    IndexName: 'GSI1',
-                    KeyConditionExpression: 'gsi1pk = :pkVal AND gsi1sk BETWEEN :startDate AND :endDate',
+                    IndexName: 'GSI3',
+                    KeyConditionExpression: filters.startDate && filters.endDate
+                        ? 'gsi3pk = :pkVal AND gsi3sk BETWEEN :startDate AND :endDate'
+                        : 'gsi3pk = :pkVal AND gsi3sk <= :endDate',
                     ExpressionAttributeValues: {
-                        ':pkVal': 'TYPE#LOG',
-                        ':startDate': filters.startDate,
-                        ':endDate': filters.endDate
+                        ':pkVal': `EVENT#${filters.eventType}`,
+                        ':endDate': filters.endDate || new Date().toISOString(),
+                        ...(filters.startDate && filters.endDate ? { ':startDate': filters.startDate } : {})
                     },
                     ScanIndexForward: false,
-                    Limit: limit
+                    Limit: limit,
+                    ExclusiveStartKey: startKey
                 });
-            } else {
-                // If no date filters, or complex filters, we might fall back to Querying latest logs or Scan.
-                // Let's query latest by default (using GSI1)
+            }
+            // Case 3: Global Time Range (GSI1)
+            // TYPE#LOG -> timestamp
+            else {
                 command = new QueryCommand({
                     TableName: AUDIT_TABLE_NAME,
                     IndexName: 'GSI1',
-                    KeyConditionExpression: 'gsi1pk = :pkVal',
+                    KeyConditionExpression: filters?.startDate && filters?.endDate
+                        ? 'gsi1pk = :pkVal AND gsi1sk BETWEEN :startDate AND :endDate'
+                        : 'gsi1pk = :pkVal AND gsi1sk <= :endDate',
                     ExpressionAttributeValues: {
                         ':pkVal': 'TYPE#LOG',
+                        ':endDate': filters?.endDate || new Date().toISOString(),
+                        ...(filters?.startDate && filters?.endDate ? { ':startDate': filters.startDate } : {})
                     },
                     ScanIndexForward: false, // Newest first
-                    Limit: limit
+                    Limit: limit,
+                    ExclusiveStartKey: startKey
                 });
             }
 
             const response = await getDynamoDBDocumentClient().send(command);
             let auditLogs = (response.Items || []).map(this.transformToAuditLog);
 
-            // In-memory filtering for other fields
+            // In-memory filtering for attributes NOT covered by Index keys (Severity, Status, ResourceType etc.)
+            // Note: Efficient pagination requires these to be FilterExpressions in the Query, but for complex combinations
+            // we often mix Query + Filter.
+            // Let's add FilterExpression to the Query if possible?
+            // DynamoDB Query FilterExpression is applied AFTER retrieval but BEFORE limit is applied?
+            // NO, it's applied after retrieval, consuming RCU for skipped items.
+            // For now, let's keep the backend logic simple and rely on client or "good enough" filtering
+            // OR apply in-memory filtering here, but that messes up pagination page size (might return < limit items).
+
+            // To be robust:
             if (filters) {
-                if (filters.status) auditLogs = auditLogs.filter(l => l.status === filters.status);
-                if (filters.eventType) auditLogs = auditLogs.filter(l => l.eventType === filters.eventType);
-                if (filters.user) auditLogs = auditLogs.filter(l => l.user === filters.user);
-                if (filters.resourceType) auditLogs = auditLogs.filter(l => l.resourceType === filters.resourceType);
+                if (filters.status && filters.status !== 'all') {
+                    auditLogs = auditLogs.filter(l => l.status === filters.status);
+                }
+                if (filters.severity) {
+                    auditLogs = auditLogs.filter(l => l.severity === filters.severity);
+                }
+                if (filters.resourceType) {
+                    auditLogs = auditLogs.filter(l => l.resourceType === filters.resourceType);
+                }
                 if (filters.searchTerm) {
                     const term = filters.searchTerm.toLowerCase();
                     auditLogs = auditLogs.filter(l =>
@@ -159,10 +212,18 @@ export class AuditService {
                 }
             }
 
-            return auditLogs;
+            const nextPageToken = response.LastEvaluatedKey
+                ? Buffer.from(JSON.stringify(response.LastEvaluatedKey)).toString('base64')
+                : undefined;
+
+            return {
+                logs: auditLogs,
+                nextPageToken
+            };
+
         } catch (error: unknown) {
             console.error('AuditService - Error fetching audit logs:', error);
-            return [];
+            return { logs: [], nextPageToken: undefined };
         }
     }
 
@@ -191,15 +252,17 @@ export class AuditService {
     }
 
     /**
-     * Get audit log statistics
+     * Get audit log stats
+     * Note: This operation is expensive (Scan/Large Query) so we might want to limit scope or cache it.
+     * For now, we'll implement a query limited to recent logs if no date range, or specific range.
      */
     static async getAuditLogStats(filters?: AuditLogFilters): Promise<AuditLogStats> {
         try {
-            // Fetch logs (reusing getAuditLogs logic)
-            // Note: This fetches limited logs, so stats are based on "recent" logs. 
-            const logs = await this.getAuditLogs({ limit: 500, ...filters });
+            // Re-use Logic but maybe force a larger limit for stats or separate aggregated table (not in scope)
+            // We'll fetch up to 1000 logs for "Recent Stats"
+            const { logs } = await this.getAuditLogs({ ...filters, limit: 1000, nextPageToken: undefined });
 
-            const stats = {
+            return {
                 totalLogs: logs.length,
                 successCount: logs.filter(log => log.status === 'success').length,
                 errorCount: logs.filter(log => log.status === 'error').length,
@@ -213,7 +276,6 @@ export class AuditService {
                 byResourceType: this.groupBy(logs, 'resourceType'),
             };
 
-            return stats;
         } catch (error: unknown) {
             console.error('AuditService - Error fetching audit log stats:', error);
             return {
@@ -235,7 +297,7 @@ export class AuditService {
     private static transformToAuditLog(item: any): AuditLog {
         return {
             id: item.id || item.pk.replace('LOG#', ''),
-            name: item.pk.replace('LOG#', ''), // Map 'name' to ID roughly
+            // name removed as it is not in AuditLog interface
             type: 'audit_log',
             timestamp: item.timestamp,
             eventType: item.eventType,
@@ -311,6 +373,8 @@ export class AuditService {
             await this.createAuditLog({
                 eventType: `${data.resourceType}.${data.action.toLowerCase().replace(/\s+/g, '_')}`,
                 ...data,
+                resource: data.resourceName || data.resourceId,
+                severity: data.status === 'error' ? 'high' : (data.status === 'warning' ? 'medium' : 'info'),
                 source: 'web-ui'
             });
         } catch (error) {
@@ -337,8 +401,11 @@ export class AuditService {
             await this.createAuditLog({
                 eventType: `${data.resourceType}.${data.action.toLowerCase().replace(/\s+/g, '_')}`,
                 ...data, // Spread rest
+                resource: data.resourceName || data.resourceId,
+                severity: data.status === 'error' ? 'high' : (data.status === 'warning' ? 'medium' : 'info'),
                 user: data.user || 'system',
                 userType: data.userType || 'system',
+                source: data.source || 'system',
             });
         } catch (error) {
             console.error('Failed to create resource action audit log:', error);

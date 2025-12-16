@@ -1,9 +1,8 @@
-import NextAuth from "next-auth/next";
+import NextAuth, { NextAuthOptions } from "next-auth";
 import CognitoProvider from "next-auth/providers/cognito";
 import { JWT } from "next-auth/jwt";
 
-// Add a callback to extract groups from the token
-const handler = NextAuth({
+export const authOptions: NextAuthOptions = {
     providers: [
         CognitoProvider({
             clientId: process.env.COGNITO_APP_CLIENT_ID as string,
@@ -44,7 +43,7 @@ const handler = NextAuth({
         async session({ session, token }) {
             // Add groups to the session
             session.user = session.user || {};
-            // session.user.groups = token.groups || [];
+            session.user.groups = token.groups || [];
             return session;
         },
         async redirect({ url, baseUrl }) {
@@ -56,6 +55,8 @@ const handler = NextAuth({
         },
     },
     secret: process.env.NEXTAUTH_SECRET,
-});
+};
+
+const handler = NextAuth(authOptions);
 
 export { handler as GET, handler as POST } 

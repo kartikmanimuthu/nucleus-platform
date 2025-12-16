@@ -1,0 +1,109 @@
+{
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Description": "CloudFormation template to create a cross-account IAM role for Nucleus Cost Optimizer Integration.",
+    "Parameters": {
+        "NucleusHostAccountId": {
+            "Type": "String",
+            "Description": "The AWS Account ID where the Nucleus Cost Optimizer platform is hosted.",
+            "AllowedPattern": "^\\d{12}$",
+            "ConstraintDescription": "Must be a valid 12-digit AWS Account ID."
+        },
+        "RoleName": {
+            "Type": "String",
+            "Description": "The name of the IAM role to be created.",
+            "Default": "NucleusCostOptimizerRole",
+            "AllowedPattern": "[\\w+=,.@-]{1,64}",
+            "ConstraintDescription": "Must be a valid IAM role name."
+        },
+        "ExternalId": {
+            "Type": "String",
+            "Description": "The External ID for cross-account access security (optional but recommended).",
+            "Default": "Nucleus-Platform"
+        }
+    },
+    "Resources": {
+        "NucleusCrossAccountRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "RoleName": {
+                    "Ref": "RoleName"
+                },
+                "AssumeRolePolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": {
+                                "AWS": {
+                                    "Fn::Sub": "arn:aws:iam::${NucleusHostAccountId}:root"
+                                }
+                            },
+                            "Action": "sts:AssumeRole",
+                            "Condition": {
+                                "StringEquals": {
+                                    "sts:ExternalId": {
+                                        "Ref": "ExternalId"
+                                    }
+                                }
+                            }
+                        }
+                    ]
+                },
+                "Description": "Role for Nucleus Cost Optimizer to manage resources.",
+                "Policies": [
+                    {
+                        "PolicyName": "NucleusCostOptimizerPolicy",
+                        "PolicyDocument": {
+                            "Version": "2012-10-17",
+                            "Statement": [
+                                {
+                                    "Sid": "EC2Access",
+                                    "Effect": "Allow",
+                                    "Action": [
+                                        "ec2:DescribeInstances",
+                                        "ec2:DescribeRegions",
+                                        "ec2:StartInstances",
+                                        "ec2:StopInstances"
+                                    ],
+                                    "Resource": "*"
+                                },
+                                {
+                                    "Sid": "ECSAccess",
+                                    "Effect": "Allow",
+                                    "Action": [
+                                        "ecs:ListClusters",
+                                        "ecs:ListServices",
+                                        "ecs:DescribeServices",
+                                        "ecs:UpdateService"
+                                    ],
+                                    "Resource": "*"
+                                },
+                                {
+                                    "Sid": "RDSAccess",
+                                    "Effect": "Allow",
+                                    "Action": [
+                                        "rds:DescribeDBInstances",
+                                        "rds:StartDBInstance",
+                                        "rds:StopDBInstance"
+                                    ],
+                                    "Resource": "*"
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        }
+    },
+    "Outputs": {
+        "RoleArn": {
+            "Description": "The ARN of the created IAM role.",
+            "Value": {
+                "Fn::GetAtt": [
+                    "NucleusCrossAccountRole",
+                    "Arn"
+                ]
+            }
+        }
+    }
+}

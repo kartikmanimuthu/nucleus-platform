@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { useSession } from "next-auth/react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -36,7 +37,7 @@ import {
     CollapsibleContent,
     CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { Save, Loader2, AlertCircle, Copy, Check, ChevronDown, Terminal } from "lucide-react";
+import { Save, Loader2, AlertCircle, Copy, Check, ChevronDown, Terminal, Download } from "lucide-react";
 import { ClientAccountService } from "@/lib/client-account-service";
 
 const createAccountSchema = z.object({
@@ -75,10 +76,12 @@ const AWS_REGIONS = [
 ];
 
 export function CreateAccountForm() {
+  const { data: session } = useSession(); // Get session
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [template, setTemplate] = useState<string | null>(null);
+  const [templateYaml, setTemplateYaml] = useState<string | null>(null);
   const [isTemplateOpen, setIsTemplateOpen] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -95,6 +98,7 @@ export function CreateAccountForm() {
   });
 
   const accountId = form.watch("accountId");
+  const accountName = form.watch("name");
 
   const generateTemplate = async () => {
     if (!accountId || accountId.length !== 12) {
@@ -106,21 +110,24 @@ export function CreateAccountForm() {
       setGenerating(true);
       const hubAccountId = process.env.NEXT_PUBLIC_HUB_ACCOUNT_ID || "123456789012"; 
       
-      const response = await fetch(`/api/accounts/template?targetAccountId=${accountId}&hubAccountId=${hubAccountId}`);
+      const response = await fetch(`/api/accounts/template?targetAccountId=${accountId}&accountName=${encodeURIComponent(accountName || '')}&hubAccountId=${hubAccountId}`);
       if (!response.ok) throw new Error("Failed to generate template");
       
       const data = await response.json();
       
       if (data.template) {
-          // Fix: directly stringify the object, do not parse it first as it is already an object
           setTemplate(JSON.stringify(data.template, null, 2));
-          setIsTemplateOpen(true);
       }
+      if (data.templateYaml) {
+          setTemplateYaml(data.templateYaml);
+      }
+      
+      setIsTemplateOpen(true);
 
       if (data.externalId) {
           form.setValue("externalId", data.externalId);
           
-          const suggestedRoleArn = `arn:aws:iam::${accountId}:role/NucleusCrossAccountCheckRole`; // Updated to match Template role name
+          const suggestedRoleArn = `arn:aws:iam::${accountId}:role/NucleusCrossAccountCheckRole`; 
           if (!form.getValues("roleArn")) {
               form.setValue("roleArn", suggestedRoleArn);
           }
@@ -140,6 +147,35 @@ export function CreateAccountForm() {
       setTimeout(() => setCopied(false), 2000);
   };
 
+  const downloadFile = (format: 'yaml' | 'json') => {
+      const fileName = `${accountId || 'nucleus'}_${accountName?.replace(/\s+/g, '_') || 'integration'}.${format}`;
+      let content = '';
+      let type = '';
+
+      if (format === 'json') {
+          content = template || ''; // Already stringified
+          type = 'application/json';
+      } else {
+          content = templateYaml || '';
+          type = 'text/yaml';
+      }
+
+      if (!content) {
+          alert("Please generate the template first.");
+          return;
+      }
+
+      const blob = new Blob([content], { type });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+  };
+
   const onSubmit = async (data: CreateAccountFormValues) => {
     try {
       setLoading(true);
@@ -152,8 +188,8 @@ export function CreateAccountForm() {
         regions: [data.region], 
         active: true, // Default to active on creation
         description: data.description || "",
-        createdBy: "web-ui-user",
-        updatedBy: "web-ui-user",
+        createdBy: session?.user?.email || "web-ui-user",
+        updatedBy: session?.user?.email || "web-ui-user",
       });
 
       router.push("/accounts");
@@ -283,15 +319,39 @@ export function CreateAccountForm() {
                                 Generate the template to deploy in the account {accountId ? `(${accountId})` : ''}
                             </p>
                         </div>
-                        <Button 
-                            type="button" 
-                            variant="secondary"
-                            onClick={generateTemplate}
-                            disabled={generating || !accountId || accountId.length !== 12}
-                        >
-                            {generating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                            {template ? "Regenerate Template" : "Generate Template"}
-                        </Button>
+                        <div className="flex space-x-2">
+                            <Button 
+                                type="button" 
+                                variant="outline"
+                                size="sm"
+                                onClick={() => downloadFile('yaml')}
+                                disabled={!templateYaml}
+                                title="Download CloudFormation Template (YAML)"
+                            >
+                                <Download className="mr-2 h-4 w-4" />
+                                YAML Template
+                            </Button>
+                            <Button 
+                                type="button" 
+                                variant="outline"
+                                size="sm"
+                                onClick={() => downloadFile('json')}
+                                disabled={!template}
+                                title="Download CloudFormation Template (JSON)"
+                            >
+                                <Download className="mr-2 h-4 w-4" />
+                                JSON Template
+                            </Button>
+                            <Button 
+                                type="button" 
+                                variant="secondary"
+                                onClick={generateTemplate}
+                                disabled={generating || !accountId || accountId.length !== 12}
+                            >
+                                {generating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                                {template ? "Regenerate Template" : "Generate Template"}
+                            </Button>
+                        </div>
                     </div>
 
                     {template && (

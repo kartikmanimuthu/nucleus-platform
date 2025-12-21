@@ -1,7 +1,7 @@
 import { graph } from '@/lib/agent/graph';
 import { HumanMessage, AIMessage, ToolMessage } from '@langchain/core/messages';
 import { toUIMessageStream } from '@ai-sdk/langchain';
-import { createUIMessageStreamResponse } from 'ai';
+import { createUIMessageStreamResponse, UIMessageChunk } from 'ai';
 
 export const maxDuration = 60;
 
@@ -59,7 +59,7 @@ export async function POST(req: Request) {
         );
 
         return createUIMessageStreamResponse({
-            stream: toUIMessageStream(stream)
+            stream: processStream(stream)
         });
 
     } catch (error) {
@@ -78,4 +78,115 @@ export async function POST(req: Request) {
 
 function unknownError(error: unknown): string {
     return error instanceof Error ? error.message : 'Internal server error';
+}
+
+function processStream(stream: any): ReadableStream<UIMessageChunk> {
+    return new ReadableStream({
+        async start(controller) {
+            let partCounter = 0;
+            let currentPartId = "";
+            let streamStarted = false;
+            let currentType: 'reasoning' | 'text' = 'reasoning';
+            let hasCalledTool = false;
+
+            const safeEnqueue = (chunk: any) => {
+                try {
+                    controller.enqueue(chunk);
+                } catch (e) {
+                    // Ignore closed controller
+                    return false;
+                }
+                return true;
+            };
+
+            try {
+                // Initialize message
+                if (!safeEnqueue({ type: 'start' })) return;
+
+                for await (const event of stream) {
+                    try {
+                        if (event.event === "on_chat_model_start") {
+                            partCounter++;
+                            currentPartId = partCounter.toString();
+                            streamStarted = false;
+
+                            // First call is reasoning, subsequent after tools are text
+                            currentType = hasCalledTool ? 'text' : 'reasoning';
+
+                            if (!safeEnqueue({ type: `${currentType}-start` as any, id: currentPartId })) break;
+                            streamStarted = true;
+                        }
+                        else if (event.event === "on_chat_model_stream") {
+                            const content = event.data.chunk.content;
+                            let text = "";
+                            if (typeof content === "string") {
+                                text = content;
+                            } else if (Array.isArray(content)) {
+                                text = content
+                                    .filter((c: any) => c.type === 'text')
+                                    .map((c: any) => c.text)
+                                    .join('');
+                            }
+
+                            if (text && streamStarted) {
+                                if (!safeEnqueue({
+                                    type: `${currentType}-delta` as any,
+                                    id: currentPartId,
+                                    delta: text,
+                                })) break;
+                            }
+                        }
+                        else if (event.event === "on_chat_model_end") {
+                            if (streamStarted) {
+                                if (!safeEnqueue({ type: `${currentType}-end` as any, id: currentPartId })) break;
+                                streamStarted = false;
+                            }
+                        }
+                        else if (event.event === "on_tool_start") {
+                            hasCalledTool = true;
+                            const { name, args, id } = event.data;
+                            if (id) {
+                                if (!safeEnqueue({
+                                    type: "tool-input-start",
+                                    toolCallId: id,
+                                    toolName: name,
+                                })) break;
+
+                                if (!safeEnqueue({
+                                    type: "tool-input-available",
+                                    toolCallId: id,
+                                    toolName: name,
+                                    input: args,
+                                })) break;
+                            }
+                        }
+                        else if (event.event === "on_tool_end") {
+                            const { output, id } = event.data;
+                            if (id) {
+                                if (!safeEnqueue({
+                                    type: "tool-output-available",
+                                    toolCallId: id,
+                                    output: output?.content || output || "",
+                                })) break;
+                            }
+                        }
+                    } catch (innerError) {
+                        break;
+                    }
+                }
+
+                // Finalize message
+                safeEnqueue({ type: 'finish' });
+
+                try {
+                    controller.close();
+                } catch (e) { }
+            } catch (error) {
+                console.error("Stream processing loop error:", error);
+                try {
+                    controller.error(error);
+                } catch (e) { }
+            }
+        }
+    });
 }

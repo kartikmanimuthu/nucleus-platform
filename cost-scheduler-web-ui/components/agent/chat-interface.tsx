@@ -150,7 +150,7 @@ export function ChatInterface() {
                                 )}
                             >
                                 <div className="whitespace-pre-wrap text-sm leading-relaxed">
-                                {part.text}
+                                {part.text || ""}
                                 </div>
                             </div>
                         );
@@ -164,14 +164,14 @@ export function ChatInterface() {
                                     Thought Process
                                 </div>
                                 <div className="p-3 whitespace-pre-wrap text-muted-foreground font-mono">
-                                    {part.text}
+                                    {part.text || ""}
                                 </div>
                             </div>
                          );
                     }
 
                     // Check for tool invocation (dynamic or tool-NAME)
-                    if (part.type === 'dynamic-tool' || part.toolCallId) {
+                    if (part.type === 'dynamic-tool' || part.type.startsWith('tool-') || part.toolCallId) {
                         const toolName = part.toolName || (part.type.startsWith('tool-') ? part.type.replace('tool-', '') : 'tool');
                         const args = part.input || part.args; // standard naming is input, previous was args
                         const result = part.output || part.result;

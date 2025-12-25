@@ -243,8 +243,11 @@ export function createReflectionGraph(config: GraphConfig) {
             ? lastMessage.content
             : JSON.stringify(lastMessage.content);
 
-        console.log(`\n--- PLANNER: Creating plan for: ${truncateOutput(taskDescription, 100)} ---`);
-        console.log(`[Model Invocation] Using model: ${modelId}`);
+        console.log(`\n================================================================================`);
+        console.log(`🤖 [PLANNER] Initiating planning phase`);
+        console.log(`   Task: "${truncateOutput(taskDescription, 100)}"`);
+        console.log(`   Model: ${modelId}`);
+        console.log(`================================================================================\n`);
 
         const plannerSystemPrompt = new SystemMessage(`You are a development planning agent.
 Given a task, create a clear step-by-step plan to accomplish it.
@@ -291,8 +294,10 @@ Only return the JSON array, nothing else.`);
         }
 
         const planText = planSteps.map((s, i) => `${i + 1}. ${s.step}`).join('\n');
-        console.log(`--- PLANNER: Plan created ---`);
+        console.log(`\n📋 [PLANNER] Plan Generated:`);
+        console.log(`--------------------------------------------------------------------------------`);
         console.log(planText);
+        console.log(`--------------------------------------------------------------------------------\n`);
 
         return {
             plan: planSteps,
@@ -306,8 +311,11 @@ Only return the JSON array, nothing else.`);
     async function generateNode(state: ReflectionState): Promise<Partial<ReflectionState>> {
         const { messages, plan, iterationCount } = state;
 
-        console.log(`\n--- EXECUTOR: Working on task (iteration ${iterationCount + 1}) ---`);
-        console.log(`[Model Invocation] Using model: ${modelId}`);
+        console.log(`\n================================================================================`);
+        console.log(`⚡ [EXECUTOR] Iteration ${iterationCount + 1}/${MAX_ITERATIONS}`);
+        console.log(`   Current Step: ${plan.find(s => s.status === 'pending')?.step || 'Executing...'}`);
+        console.log(`   Model: ${modelId}`);
+        console.log(`================================================================================\n`);
 
         const pendingSteps = plan.filter(s => s.status === 'pending' || s.status === 'in_progress');
         const currentStep = pendingSteps[0]?.step || "Complete the task";
@@ -331,9 +339,13 @@ After using tools, provide a brief summary of what you accomplished.`);
         const response = await modelWithTools.invoke([executorSystemPrompt, ...getRecentMessages(messages, 10)]);
 
         if ('tool_calls' in response && response.tool_calls && response.tool_calls.length > 0) {
+            console.log(`\n🛠️ [EXECUTOR] Tool Calls Generated:`);
             for (const toolCall of response.tool_calls) {
-                console.log(`💭 EXECUTOR: Using tool '${toolCall.name}'`);
+                console.log(`   → Tool: ${toolCall.name}`);
+                console.log(`     Args: ${JSON.stringify(toolCall.args)}`);
             }
+        } else {
+            console.log(`\n💬 [EXECUTOR] No tools called. Generating text response.`);
         }
 
         return {
@@ -344,9 +356,9 @@ After using tools, provide a brief summary of what you accomplished.`);
 
     // Custom tool node that collects results
     async function collectingToolNode(state: ReflectionState): Promise<Partial<ReflectionState>> {
-        console.log(`[Graph] collectingToolNode started for thread. Messages: ${state.messages.length}`);
+        console.log(`\n⚙️ [TOOLS] Executing tool calls...`);
         const result = await toolNode.invoke(state);
-        console.log(`[Graph] toolNode.invoke finished. Result messages: ${result.messages?.length || 0}`);
+        console.log(`⚙️ [TOOLS] Execution complete. Result messages: ${result.messages?.length || 0}`);
 
         // Extract tool results for final summary
         const newToolResults: string[] = [];
@@ -354,7 +366,10 @@ After using tools, provide a brief summary of what you accomplished.`);
             for (const msg of result.messages) {
                 if (msg._getType() === 'tool') {
                     const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
-                    newToolResults.push(truncateOutput(content, 1000));
+                    const truncated = truncateOutput(content, 1000);
+                    newToolResults.push(truncated);
+                    console.log(`   ✅ [TOOL RESULT] ${msg.name || 'Unknown Tool'}:`);
+                    console.log(`      ${truncateOutput(content, 200).replace(/\n/g, '\n      ')}`);
                 }
             }
         }
@@ -370,8 +385,11 @@ After using tools, provide a brief summary of what you accomplished.`);
     async function reflectNode(state: ReflectionState): Promise<Partial<ReflectionState>> {
         const { messages, taskDescription, iterationCount, plan, toolResults } = state;
 
-        console.log(`\n--- REFLECTOR: Analyzing execution results ---`);
-        console.log(`[Model Invocation] Using model: ${modelId}`);
+        console.log(`\n================================================================================`);
+        console.log(`🤔 [REFLECTOR] Analyzing execution results`);
+        console.log(`   Iteration: ${iterationCount}/${MAX_ITERATIONS}`);
+        console.log(`   Model: ${modelId}`);
+        console.log(`================================================================================`);
 
         const reflectorSystemPrompt = new SystemMessage(`You are a quality assurance agent reviewing development work.
 
@@ -429,11 +447,12 @@ Only return the JSON object, nothing else.`);
             isComplete = iterationCount >= MAX_ITERATIONS;
         }
 
-        console.log(`--- REFLECTOR: Analysis complete ---`);
-        console.log(`  Analysis: ${truncateOutput(analysis, 300)}`);
-        if (issues !== "None") console.log(`  Issues: ${truncateOutput(issues, 200)}`);
-        if (suggestions !== "None") console.log(`  Suggestions: ${truncateOutput(suggestions, 200)}`);
-        console.log(`  Task Complete: ${isComplete}`);
+        console.log(`\n🧐 [REFLECTOR] Analysis Complete:`);
+        console.log(`   Analysis:    ${truncateOutput(analysis, 300)}`);
+        console.log(`   Issues:      ${issues !== "None" ? '❌ ' + issues : '✅ None'}`);
+        console.log(`   Suggestions: ${suggestions !== "None" ? '💡 ' + suggestions : 'None'}`);
+        console.log(`   Status:      ${isComplete ? '✅ COMPLETE' : '🔄 CONTINUING'}`);
+        console.log(`--------------------------------------------------------------------------------\n`);
 
         const feedback = `🔍 **Reflection Analysis:**
 ${analysis}
@@ -461,8 +480,10 @@ ${suggestions !== "None" ? `💡 **Suggestions:** ${suggestions}` : ""}
     async function reviseNode(state: ReflectionState): Promise<Partial<ReflectionState>> {
         const { messages, reflection, errors } = state;
 
-        console.log(`\n--- REVISER: Addressing feedback and making improvements ---`);
-        console.log(`[Model Invocation] Using model: ${modelId}`);
+        console.log(`\n================================================================================`);
+        console.log(`📝 [REVISER] Applying fixes and improvements`);
+        console.log(`   Model: ${modelId}`);
+        console.log(`================================================================================\n`);
 
         const reviserSystemPrompt = new SystemMessage(`You are a code revision agent.
 Based on the feedback provided, make improvements to address the issues.
@@ -479,8 +500,9 @@ Available tools:
         const response = await modelWithTools.invoke([reviserSystemPrompt, ...getRecentMessages(messages, 10)]);
 
         if ('tool_calls' in response && response.tool_calls && response.tool_calls.length > 0) {
+            console.log(`\n🛠️ [REVISER] Tool Calls Generated:`);
             for (const toolCall of response.tool_calls) {
-                console.log(`💭 REVISER: Using tool '${toolCall.name}' to fix issues`);
+                console.log(`   → Tool: ${toolCall.name}`);
             }
         }
 
@@ -494,7 +516,9 @@ Available tools:
     async function finalNode(state: ReflectionState): Promise<Partial<ReflectionState>> {
         const { taskDescription, iterationCount, reflection, toolResults, messages, plan } = state;
 
-        console.log(`\n--- FINAL: Generating comprehensive summary ---`);
+        console.log(`\n================================================================================`);
+        console.log(`🏁 [FINAL] Generating comprehensive summary`);
+        console.log(`================================================================================\n`);
 
         // Create a summary prompt to generate user-friendly final output
         const summarySystemPrompt = new SystemMessage(`You are a helpful assistant summarizing the results of a completed task.

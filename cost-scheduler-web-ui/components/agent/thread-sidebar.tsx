@@ -63,8 +63,8 @@ export function ThreadSidebar({
         fetchThreads();
         // Poll for updates every 10s or relies on parent to trigger refresh?
         // Simple polling for now
-        const interval = setInterval(fetchThreads, 10000);
-        return () => clearInterval(interval);
+        // const interval = setInterval(fetchThreads, 300000);
+        // return () => clearInterval(interval);
     }, []);
 
     const handleDeleteThread = async (e: React.MouseEvent, id: string) => {

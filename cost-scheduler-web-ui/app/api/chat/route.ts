@@ -43,7 +43,11 @@ export async function POST(req: Request) {
             // await threadStore.updateThread(threadId, { model });
         }
 
-        console.log(`[API] Thread ID: ${threadId}, Auto-Approve: ${autoApprove}, Model: ${model?.substring(0, 30)}...`);
+        console.log(`\n🚀 [API] New Request Started`);
+        console.log(`   Thread ID:    ${threadId}`);
+        console.log(`   Auto-Approve: ${autoApprove}`);
+        console.log(`   Model:        ${model || 'Default'}`);
+        console.log(`   Timestamp:    ${new Date().toISOString()}`);
 
         // Create graph with configuration
         const graph = createReflectionGraph({
@@ -62,13 +66,12 @@ export async function POST(req: Request) {
             // "Approved" means "Execute the real tool"
             // So we DO NOT add this message to the state, we just resume
             if (lastMessage.content === 'Approved') {
-                console.log(`[API] [Thread: ${threadId}] User Approved Execution - Resuming graph from interrupt.`);
-                // We don't update state, just resume from interrupt
+                console.log(`✅ [API] User Approved Execution logic. Resuming...`);
             }
             // Any other content (e.g. "Cancelled by user") is treated as a mock result
             // So we ADD it to state, effectively skipping the real tool execution
             else {
-                console.log(`[API] [Thread: ${threadId}] User Provided Result - Skipping real tool. Content: "${lastMessage.content.substring(0, 20)}..."`);
+                console.log(`⚠️ [API] User Rejected/Cancelled. Providing Feedback: "${lastMessage.content.substring(0, 50)}..."`);
                 const toolMessage = new ToolMessage({
                     tool_call_id: lastMessage.toolCallId || '',
                     content: lastMessage.content
@@ -295,14 +298,14 @@ function processStream(stream: AsyncIterable<StreamEvent>, autoApprove: boolean)
                             if (!autoApprove) {
                                 const output = event.data?.output;
                                 if (output && output.tool_calls && output.tool_calls.length > 0) {
-                                    console.log(`[Stream] Found ${output.tool_calls.length} pending tool calls - awaiting approval`);
+                                    console.log(`🛑 [Stream] Pausing for Human Approval: ${output.tool_calls.length} tools pending.`);
 
                                     for (const toolCall of output.tool_calls) {
                                         const toolId = toolCall.id || `tool-${Date.now()}`;
                                         const toolName = toolCall.name;
                                         const toolArgs = toolCall.args;
 
-                                        // Emit tool-input-start
+                                        console.log(`   ❓ Requesting approval for: ${toolName}`);
                                         if (!safeEnqueue({
                                             type: "tool-input-start",
                                             toolCallId: toolId,
@@ -322,7 +325,7 @@ function processStream(stream: AsyncIterable<StreamEvent>, autoApprove: boolean)
                         }
                         else if (event.event === "on_tool_start") {
                             const { name, id } = event.data || {};
-                            console.log(`[Stream] Tool starting: ${name}`);
+                            console.log(`▶️  [Stream] Tool Start: ${name} (ID: ${id})`);
 
                             // When auto-approve is ON, emit tool events for display
                             if (autoApprove && id) {
@@ -344,13 +347,13 @@ function processStream(stream: AsyncIterable<StreamEvent>, autoApprove: boolean)
                         }
                         else if (event.event === "on_tool_end") {
                             const { output, id } = event.data || {};
-                            console.log(`[Stream] Tool completed: ${id}`);
+                            console.log(`◀️  [Stream] Tool End: ${id}`);
 
                             if (id) {
-                                const outputContent = typeof output === 'object' && output !== null && 'content' in output 
-                                    ? (output as { content: string }).content 
+                                const outputContent = typeof output === 'object' && output !== null && 'content' in output
+                                    ? (output as { content: string }).content
                                     : output || "";
-                                
+
                                 if (!safeEnqueue({
                                     type: "tool-output-available",
                                     toolCallId: id,
@@ -368,14 +371,14 @@ function processStream(stream: AsyncIterable<StreamEvent>, autoApprove: boolean)
 
                 try {
                     controller.close();
-                } catch (e) { 
+                } catch (e) {
                     // Controller already closed
                 }
             } catch (error) {
                 console.error("Stream processing loop error:", error);
                 try {
                     controller.error(error);
-                } catch (e) { 
+                } catch (e) {
                     // Controller already errored
                 }
             }

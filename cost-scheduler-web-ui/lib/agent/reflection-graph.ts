@@ -76,7 +76,8 @@ const graphState: StateGraphArgs<ReflectionState>["channels"] = {
 // --- Model Initialization ---
 const model = new ChatBedrockConverse({
     region: "us-east-1",
-    model: "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    // model: "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    model: "us.anthropic.claude-haiku-4-5-20251001-v1:0",
     maxTokens: 4096,
     temperature: 0,
     streaming: true,

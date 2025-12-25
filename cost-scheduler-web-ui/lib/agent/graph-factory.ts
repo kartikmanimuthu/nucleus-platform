@@ -11,6 +11,12 @@ import {
 import { ToolNode } from "@langchain/langgraph/prebuilt";
 
 // --- State Definition ---
+// Shared checkpointer for the session (in a real app, use a database like PostgresSaver)
+// Usage of globalThis ensures the checkpointer survives Next.js hot reloads in dev mode
+const globalForCheckpointer = globalThis as unknown as { checkpointer: MemorySaver };
+const checkpointer = globalForCheckpointer.checkpointer || new MemorySaver();
+if (process.env.NODE_ENV !== "production") globalForCheckpointer.checkpointer = checkpointer;
+
 export interface PlanStep {
     step: string;
     status: 'pending' | 'in_progress' | 'completed' | 'failed';
@@ -93,17 +99,18 @@ function truncateOutput(text: string, maxChars: number = 500): string {
 // Get recent messages safely - ensuring tool call/result pairs are kept together
 // Also filters out empty messages that cause Bedrock API errors
 function getRecentMessages(messages: BaseMessage[], maxMessages: number = 8): BaseMessage[] {
-    // First, filter out messages with empty content
+    // First, filter out messages with empty content (but keep AIMessages with tool_calls)
     const validMessages = messages.filter(msg => {
         const content = msg.content;
-        if (!content) return false;
-        if (typeof content === 'string' && content.trim() === '') return false;
-        if (Array.isArray(content) && content.length === 0) return false;
-        // Also check for AIMessages with tool_calls - these are valid even with empty text content
+        // AIMessages with tool_calls are valid even with empty content
         if (msg._getType() === 'ai' && 'tool_calls' in msg) {
             const aiMsg = msg as AIMessage;
             if (aiMsg.tool_calls && aiMsg.tool_calls.length > 0) return true;
         }
+        // Filter out empty content
+        if (!content) return false;
+        if (typeof content === 'string' && content.trim() === '') return false;
+        if (Array.isArray(content) && content.length === 0) return false;
         return true;
     });
 
@@ -111,33 +118,72 @@ function getRecentMessages(messages: BaseMessage[], maxMessages: number = 8): Ba
         return validMessages;
     }
 
+    // Build a proper subset that maintains tool_call/tool_result pairing
+    // Strategy: Start from the end and work backwards, always including complete tool call groups
     const result: BaseMessage[] = [];
     let i = validMessages.length - 1;
 
-    while (i >= 0 && result.length < maxMessages) {
+    while (i >= 0 && result.length < maxMessages * 2) { // Allow some buffer for tool pairs
         const msg = validMessages[i];
 
         if (msg._getType() === 'tool') {
-            result.unshift(msg);
+            // Found a ToolMessage - we need to find ALL tool messages in this batch
+            // AND their corresponding AIMessage with tool_calls
+            const toolBatch: BaseMessage[] = [msg];
             let j = i - 1;
-            while (j >= 0) {
-                const prevMsg = validMessages[j];
-                if (prevMsg._getType() === 'ai' && 'tool_calls' in prevMsg &&
-                    (prevMsg as AIMessage).tool_calls && (prevMsg as AIMessage).tool_calls!.length > 0) {
-                    result.unshift(prevMsg);
-                    i = j - 1;
-                    break;
-                } else if (prevMsg._getType() === 'tool') {
-                    result.unshift(prevMsg);
-                    j--;
-                } else {
-                    break;
-                }
+
+            // Collect all consecutive tool messages
+            while (j >= 0 && validMessages[j]._getType() === 'tool') {
+                toolBatch.unshift(validMessages[j]);
+                j--;
             }
-            if (j < 0) i = j;
+
+            // Now j should point to the AIMessage with tool_calls
+            if (j >= 0 && validMessages[j]._getType() === 'ai') {
+                const aiMsg = validMessages[j] as AIMessage;
+                if (aiMsg.tool_calls && aiMsg.tool_calls.length > 0) {
+                    // Include the AIMessage first, then all tool results
+                    result.unshift(...toolBatch);
+                    result.unshift(validMessages[j]);
+                    i = j - 1;
+                } else {
+                    // AIMessage without tool_calls - skip the orphaned tool messages
+                    i = j;
+                }
+            } else {
+                // No AIMessage found - skip orphaned tool messages
+                i = j;
+            }
         } else {
             result.unshift(msg);
             i--;
+        }
+    }
+
+    // Final validation: ensure first message isn't a ToolMessage
+    while (result.length > 0 && result[0]._getType() === 'tool') {
+        result.shift();
+    }
+
+    // Trim to maxMessages if we collected too many
+    if (result.length > maxMessages) {
+        // Remove from the beginning, but ensure we don't break tool pairs
+        while (result.length > maxMessages) {
+            const first = result[0];
+            if (first._getType() === 'ai' && 'tool_calls' in first) {
+                const aiMsg = first as AIMessage;
+                if (aiMsg.tool_calls && aiMsg.tool_calls.length > 0) {
+                    // Remove the AIMessage and all its corresponding tool results
+                    result.shift();
+                    while (result.length > 0 && result[0]._getType() === 'tool') {
+                        result.shift();
+                    }
+                } else {
+                    result.shift();
+                }
+            } else {
+                result.shift();
+            }
         }
     }
 
@@ -274,7 +320,9 @@ After using tools, provide a brief summary of what you accomplished.`);
 
     // Custom tool node that collects results
     async function collectingToolNode(state: ReflectionState): Promise<Partial<ReflectionState>> {
+        console.log(`[Graph] collectingToolNode started for thread. Messages: ${state.messages.length}`);
         const result = await toolNode.invoke(state);
+        console.log(`[Graph] toolNode.invoke finished. Result messages: ${result.messages?.length || 0}`);
 
         // Extract tool results for final summary
         const newToolResults: string[] = [];
@@ -531,9 +579,6 @@ ${summaryContent}`;
         })
 
         .addEdge("final", END);
-
-    // --- Checkpointer for persistence ---
-    const checkpointer = new MemorySaver();
 
     // Compile with or without interrupt based on autoApprove setting
     if (autoApprove) {

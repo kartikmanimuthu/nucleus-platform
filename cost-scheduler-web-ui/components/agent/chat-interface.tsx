@@ -33,11 +33,8 @@ import {
 
 // Available models
 const AVAILABLE_MODELS = [
-  { id: 'global.anthropic.claude-sonnet-4-5-20250929-v1:0', label: 'Claude Sonnet 4.5 (Default)', provider: 'anthropic' },
-  { id: 'anthropic.claude-3-5-sonnet-20241022-v2:0', label: 'Claude 3.5 Sonnet', provider: 'anthropic' },
-  { id: 'anthropic.claude-3-5-haiku-20241022-v1:0', label: 'Claude 3.5 Haiku (Fast)', provider: 'anthropic' },
-  { id: 'amazon.nova-pro-v1:0', label: 'Amazon Nova Pro', provider: 'amazon' },
-  { id: 'amazon.nova-lite-v1:0', label: 'Amazon Nova Lite', provider: 'amazon' },
+  { id: 'global.anthropic.claude-sonnet-4-5-20250929-v1:0', label: 'Claude 3.5 Sonnet (Global)', provider: 'anthropic' },
+  { id: 'us.anthropic.claude-haiku-4-5-20251001-v1:0', label: 'Claude 3.5 Haiku (US)', provider: 'anthropic' },
 ];
 
 // Phase types matching backend
@@ -179,7 +176,37 @@ export function ChatInterface() {
     setHasStarted(true);
     
     await sendMessage({
-      text: value
+      content: value,
+      role: 'user'
+    }, {
+      body: {
+        threadId,
+        autoApprove,
+        model: selectedModel,
+      }
+    });
+  };
+
+  // Handle tool approval - makes explicit API call to resume LangGraph execution
+  const handleToolApproval = async (toolCallId: string, approved: boolean) => {
+    console.log(`[ChatInterface] Tool ${approved ? 'approved' : 'rejected'}: ${toolCallId}`);
+    
+    // First, update local state via addToolResult (for UI feedback)
+    const result = approved ? 'Approved' : 'Cancelled by user';
+    addToolResult({ toolCallId, result });
+    
+    // Then, make explicit API call to resume the graph
+    // We send the tool result as a message with role: 'tool'
+    await sendMessage({
+      role: 'tool' as any,
+      content: result,
+      toolCallId: toolCallId,
+    } as any, {
+      body: {
+        threadId,
+        autoApprove,
+        model: selectedModel,
+      }
     });
   };
 
@@ -287,14 +314,14 @@ export function ChatInterface() {
             <ConfirmationActions>
               <ConfirmationAction 
                 variant="outline"
-                onClick={() => addToolResult({ toolCallId: part.toolCallId, result: 'Cancelled by user' })}
+                onClick={() => handleToolApproval(part.toolCallId, false)}
               >
                 <X className="w-3 h-3 mr-1" />
                 Reject
               </ConfirmationAction>
               <ConfirmationAction 
                 variant="default"
-                onClick={() => addToolResult({ toolCallId: part.toolCallId, result: 'Approved' })}
+                onClick={() => handleToolApproval(part.toolCallId, true)}
               >
                 <Check className="w-3 h-3 mr-1" />
                 Approve & Run

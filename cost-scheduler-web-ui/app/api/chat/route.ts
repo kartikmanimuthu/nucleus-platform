@@ -30,12 +30,24 @@ export async function POST(req: Request) {
         if (lastMessage.role === 'tool') {
             // Tool result (Human-in-the-Loop approval)
             console.log(`[API] Processing tool result: ${lastMessage.toolCallId}`);
-            const toolMessage = new ToolMessage({
-                tool_call_id: lastMessage.toolCallId,
-                content: lastMessage.content
-            });
 
-            await graph.updateState(config, { messages: [toolMessage] });
+            // "Approved" means "Execute the real tool"
+            // So we DO NOT add this message to the state, we just resume
+            if (lastMessage.content === 'Approved') {
+                console.log(`[API] [Thread: ${threadId}] User Approved Execution - Resuming graph from interrupt.`);
+                // We don't update state, just resume from interrupt
+            }
+            // Any other content (e.g. "Cancelled by user") is treated as a mock result
+            // So we ADD it to state, effectively skipping the real tool execution
+            else {
+                console.log(`[API] [Thread: ${threadId}] User Provided Result - Skipping real tool. Content: "${lastMessage.content.substring(0, 20)}..."`);
+                const toolMessage = new ToolMessage({
+                    tool_call_id: lastMessage.toolCallId,
+                    content: lastMessage.content
+                });
+                await graph.updateState(config, { messages: [toolMessage] });
+            }
+
             input = null; // Resume from interrupt
         } else {
             // Get current state

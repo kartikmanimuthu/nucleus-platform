@@ -74,6 +74,9 @@ const graphState: StateGraphArgs<ReflectionState>["channels"] = {
 };
 
 // --- Model Initialization ---
+// NOTE: This is a static model initialization. For the dynamic model selection used in the API, 
+// see 'lib/agent/graph-factory.ts' which behaves similarly but allows the model to be injected.
+// The API route (/api/chat) uses the factory, not this static instance.
 const model = new ChatBedrockConverse({
     region: "us-east-1",
     // model: "global.anthropic.claude-sonnet-4-5-20250929-v1:0",

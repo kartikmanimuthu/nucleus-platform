@@ -2,7 +2,7 @@
 
 import { useChat } from '@ai-sdk/react';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
@@ -33,8 +33,10 @@ import {
 
 // Available models
 const AVAILABLE_MODELS = [
-  { id: 'global.anthropic.claude-sonnet-4-5-20250929-v1:0', label: 'Claude 3.5 Sonnet (Global)', provider: 'anthropic' },
-  { id: 'us.anthropic.claude-haiku-4-5-20251001-v1:0', label: 'Claude 3.5 Haiku (US)', provider: 'anthropic' },
+  { id: 'global.anthropic.claude-sonnet-4-5-20250929-v1:0', label: 'Claude 4.5 Sonnet (Global)', provider: 'amazon' },
+  { id: 'us.anthropic.claude-haiku-4-5-20251001-v1:0', label: 'Claude 4.5 Haiku (US)', provider: 'amazon' },
+  { id: 'global.amazon.nova-2-lite-v1:0', label: 'Nova 2 Lite (Global)', provider: 'amazon' },
+  { id: 'us.deepseek.r1-v1:0', label: 'DeepSeek R1 (US)', provider: 'amazon' },
 ];
 
 // Phase types matching backend
@@ -163,8 +165,15 @@ export function ChatInterface() {
     setHasStarted(false);
   };
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInputValue(e.target.value);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleFormSubmit(e as any);
+    }
   };
 
   const handleFormSubmit = async (e: React.FormEvent) => {
@@ -352,64 +361,7 @@ export function ChatInterface() {
     );
   };
 
-  // Configuration Panel (shown before conversation starts)
-  const renderConfigPanel = () => (
-    <div className="p-6 border-b bg-gradient-to-br from-muted/20 to-muted/5">
-      <div className="flex items-center gap-2 mb-4">
-        <Settings className="w-5 h-5 text-primary" />
-        <h3 className="font-semibold text-lg">Agent Configuration</h3>
-      </div>
 
-      <div className="grid gap-4 md:grid-cols-2">
-        {/* Model Selection */}
-        <div className="space-y-2">
-          <Label htmlFor="model-select" className="text-sm font-medium">
-            AI Model
-          </Label>
-          <Select value={selectedModel} onValueChange={setSelectedModel}>
-            <SelectTrigger id="model-select" className="w-full">
-              <SelectValue placeholder="Select a model" />
-            </SelectTrigger>
-            <SelectContent>
-              {AVAILABLE_MODELS.map((model) => (
-                <SelectItem key={model.id} value={model.id}>
-                  <div className="flex items-center gap-2">
-                    <span>{model.label}</span>
-                  </div>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <p className="text-xs text-muted-foreground">
-            Choose the AI model for this session
-          </p>
-        </div>
-
-        {/* Auto-Approve Toggle */}
-        <div className="space-y-2">
-          <Label className="text-sm font-medium">Tool Execution</Label>
-          <div className="flex items-center space-x-3 p-3 border rounded-lg bg-background">
-            <Checkbox 
-              id="auto-approve" 
-              checked={autoApprove}
-              onCheckedChange={(checked) => setAutoApprove(checked === true)}
-            />
-            <div className="flex-1">
-              <Label htmlFor="auto-approve" className="text-sm font-medium cursor-pointer flex items-center gap-2">
-                <Zap className="w-4 h-4 text-amber-500" />
-                Auto-Approve Tools
-              </Label>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                {autoApprove 
-                  ? "Tools will execute automatically without requiring approval" 
-                  : "Each tool execution will require manual approval"}
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
 
   // Sample prompts
   const samplePrompts = [
@@ -450,8 +402,7 @@ export function ChatInterface() {
         </Button>
       </div>
 
-      {/* Configuration Panel - only shown when no messages yet */}
-      {!hasStarted && renderConfigPanel()}
+
 
       {/* Messages */}
       <ScrollArea className="flex-1 p-4">
@@ -572,30 +523,103 @@ export function ChatInterface() {
         </div>
       </ScrollArea>
 
-      {/* Input Form */}
-      <form onSubmit={handleFormSubmit} className="p-4 border-t bg-background/50 backdrop-blur-sm">
-        <div className="flex gap-2">
-          <Input
-            value={inputValue}
-            onChange={handleInputChange}
-            placeholder="Ask the agent to plan, execute, reflect, and revise..."
-            disabled={isLoading}
-            className="flex-1"
-          />
-          <Button 
-            type="submit" 
-            disabled={isLoading || !inputValue.trim()}
-            size="icon"
-            className="bg-primary hover:bg-primary/90"
-          >
-            {isLoading ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Send className="h-4 w-4" />
-            )}
-          </Button>
-        </div>
-      </form>
+      {/* Input Area - Unified Card Design */}
+      <div className="p-4 bg-background border-t">
+        <form onSubmit={handleFormSubmit} className="border rounded-xl shadow-sm bg-card overflow-hidden focus-within:ring-1 focus-within:ring-ring transition-all">
+          
+          {/* Header: Model Selection & Settings */}
+          <div className="flex items-center justify-between px-3 py-2 border-b bg-muted/20">
+            <div className="flex items-center gap-2">
+              <Select value={selectedModel} onValueChange={setSelectedModel}>
+                <SelectTrigger className="h-7 text-xs border-transparent bg-transparent hover:bg-muted/50 focus:ring-0 gap-1 px-2 w-auto min-w-[180px]">
+                  <div className="flex items-center gap-1.5">
+                    <Sparkles className="w-3 h-3 text-primary" />
+                    <SelectValue placeholder="Select Model" />
+                  </div>
+                </SelectTrigger>
+                <SelectContent>
+                  {AVAILABLE_MODELS.map((model) => (
+                    <SelectItem key={model.id} value={model.id} className="text-xs">
+                      {model.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <span className="text-[10px] text-muted-foreground hidden sm:inline-block">
+                • {13} tools available
+              </span>
+            </div>
+            
+            <Button variant="ghost" size="icon" className="h-7 w-7 rounded-full text-muted-foreground" type="button">
+              <Settings className="w-3.5 h-3.5" />
+            </Button>
+          </div>
+
+          {/* Body: Textarea */}
+          <div className="relative">
+            <Textarea
+              value={inputValue}
+              onChange={handleInputChange}
+              onKeyDown={handleKeyDown}
+              placeholder="Ask the agent to plan, execute, reflect, and revise..."
+              disabled={isLoading}
+              className="min-h-[80px] w-full border-0 focus-visible:ring-0 resize-none p-3 text-sm bg-transparent"
+            />
+          </div>
+
+          {/* Footer: Controls & Send */}
+          <div className="flex items-center justify-between px-3 py-2 border-t bg-muted/10">
+            <div className="flex items-center gap-4">
+              <div className="flex items-center space-x-2">
+                <Checkbox 
+                  id="auto-approve-chat" 
+                  checked={autoApprove}
+                  onCheckedChange={(checked) => setAutoApprove(checked === true)}
+                  className="data-[state=checked]:bg-green-600 data-[state=checked]:border-green-600 h-4 w-4"
+                />
+                <Label 
+                  htmlFor="auto-approve-chat" 
+                  className="text-xs font-medium cursor-pointer text-muted-foreground select-none"
+                >
+                  Auto-approve tools
+                </Label>
+              </div>
+              
+              <div className="flex items-center space-x-2">
+               <Checkbox 
+                  id="show-tools" 
+                  defaultChecked={true}
+                  className="h-4 w-4 rounded-sm"
+                />
+                <Label 
+                  htmlFor="show-tools" 
+                  className="text-xs font-medium cursor-pointer text-muted-foreground select-none"
+                >
+                  Show tools
+                </Label>
+              </div>
+            </div>
+            
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-muted-foreground tabular-nums">
+                {inputValue.length}/2000
+              </span>
+              <Button 
+                type="submit" 
+                disabled={isLoading || !inputValue.trim()}
+                size="icon"
+                className="h-8 w-8 rounded-full bg-primary hover:bg-primary/90 shrink-0 transition-all"
+              >
+                {isLoading ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Send className="h-4 w-4 ml-0.5" />
+                )}
+              </Button>
+            </div>
+          </div>
+        </form>
+      </div>
     </div>
   );
 }

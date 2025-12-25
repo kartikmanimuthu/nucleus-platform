@@ -114,80 +114,99 @@ function getRecentMessages(messages: BaseMessage[], maxMessages: number = 8): Ba
         return true;
     });
 
-    if (validMessages.length <= maxMessages) {
-        return validMessages;
-    }
+    if (validMessages.length === 0) return [];
+
+    let result: BaseMessage[] = [];
+    const firstMsg = validMessages[0];
 
     // Build a proper subset that maintains tool_call/tool_result pairing
     // Strategy: Start from the end and work backwards, always including complete tool call groups
-    const result: BaseMessage[] = [];
     let i = validMessages.length - 1;
 
-    while (i >= 0 && result.length < maxMessages * 2) { // Allow some buffer for tool pairs
-        const msg = validMessages[i];
+    // If fewer messages than max, just take them all
+    if (validMessages.length <= maxMessages) {
+        result = [...validMessages];
+    } else {
+        // Collect from tail
+        while (i >= 0 && result.length < maxMessages * 2) {
+            const msg = validMessages[i];
 
-        if (msg._getType() === 'tool') {
-            // Found a ToolMessage - we need to find ALL tool messages in this batch
-            // AND their corresponding AIMessage with tool_calls
-            const toolBatch: BaseMessage[] = [msg];
-            let j = i - 1;
+            if (msg._getType() === 'tool') {
+                // Found a ToolMessage - we need to find ALL tool messages in this batch
+                const toolBatch: BaseMessage[] = [msg];
+                let j = i - 1;
 
-            // Collect all consecutive tool messages
-            while (j >= 0 && validMessages[j]._getType() === 'tool') {
-                toolBatch.unshift(validMessages[j]);
-                j--;
-            }
-
-            // Now j should point to the AIMessage with tool_calls
-            if (j >= 0 && validMessages[j]._getType() === 'ai') {
-                const aiMsg = validMessages[j] as AIMessage;
-                if (aiMsg.tool_calls && aiMsg.tool_calls.length > 0) {
-                    // Include the AIMessage first, then all tool results
-                    result.unshift(...toolBatch);
-                    result.unshift(validMessages[j]);
-                    i = j - 1;
-                } else {
-                    // AIMessage without tool_calls - skip the orphaned tool messages
-                    i = j;
+                while (j >= 0 && validMessages[j]._getType() === 'tool') {
+                    toolBatch.unshift(validMessages[j]);
+                    j--;
                 }
+
+                if (j >= 0 && validMessages[j]._getType() === 'ai') {
+                    const aiMsg = validMessages[j] as AIMessage;
+                    if (aiMsg.tool_calls && aiMsg.tool_calls.length > 0) {
+                        result.unshift(...toolBatch);
+                        result.unshift(validMessages[j]);
+                        i = j - 1;
+                    } else { i = j; }
+                } else { i = j; }
             } else {
-                // No AIMessage found - skip orphaned tool messages
-                i = j;
+                result.unshift(msg);
+                i--;
             }
-        } else {
-            result.unshift(msg);
-            i--;
         }
     }
 
-    // Final validation: ensure first message isn't a ToolMessage
-    while (result.length > 0 && result[0]._getType() === 'tool') {
-        result.shift();
-    }
-
-    // Trim to maxMessages if we collected too many
+    // Trim to maxMessages but respect tool groups (simple trim might break pairs, so we trust reasonable length)
+    // If strict length needed:
     if (result.length > maxMessages) {
-        // Remove from the beginning, but ensure we don't break tool pairs
-        while (result.length > maxMessages) {
-            const first = result[0];
-            if (first._getType() === 'ai' && 'tool_calls' in first) {
-                const aiMsg = first as AIMessage;
-                if (aiMsg.tool_calls && aiMsg.tool_calls.length > 0) {
-                    // Remove the AIMessage and all its corresponding tool results
-                    result.shift();
-                    while (result.length > 0 && result[0]._getType() === 'tool') {
-                        result.shift();
-                    }
-                } else {
-                    result.shift();
-                }
-            } else {
-                result.shift();
-            }
-        }
+        // This simple slice is risky for tools, but usually OK if maxMessages is high enough (10-12)
+        // Better to rely on "maxMessages * 2" buffer above or accept slightly longer context
+        // For now, we prioritize correctness of pairs over exact count
     }
 
-    return result;
+    // 1. Ensure conversation starts with the first User message (Task)
+    if (result.length > 0 && result[0] !== firstMsg) {
+        // Remove orphans if any
+        while (result.length > 0 && result[0]._getType() === 'tool') {
+            result.shift();
+        }
+        // Prepend first message
+        if (result.length === 0 || result[0] !== firstMsg) {
+            result.unshift(firstMsg);
+        }
+    } else if (result.length === 0) {
+        result.push(firstMsg);
+    }
+
+    // 2. Formatting for Bedrock/Nova: Ensure strictly alternating Human/AI roles
+    // We iterate and insert "Proceed" messages if we see AI -> AI
+    const formattedResult: BaseMessage[] = [];
+    if (result.length > 0) formattedResult.push(result[0]); // Push first (User)
+
+    for (let k = 1; k < result.length; k++) {
+        const prev = formattedResult[formattedResult.length - 1];
+        const curr = result[k];
+
+        // Fix: AI -> AI (Insert Human)
+        if (prev._getType() === 'ai' && curr._getType() === 'ai') {
+            formattedResult.push(new HumanMessage({ content: "Proceed." }));
+        }
+
+        // Fix: User -> User (Insert AI ack)
+        if (prev._getType() === 'human' && curr._getType() === 'human') {
+            formattedResult.push(new AIMessage({ content: "Acknowledged." }));
+        }
+
+        formattedResult.push(curr);
+    }
+
+    // Final sanity check: Must start with Human (which firstMsg is)
+    // But if firstMsg was somehow AI (should not happen if validMessages[0] is User), we fix.
+    if (formattedResult.length > 0 && formattedResult[0]._getType() === 'ai') {
+        formattedResult.unshift(new HumanMessage({ content: "Start session." }));
+    }
+
+    return formattedResult;
 }
 
 // Configuration for graph creation
@@ -222,6 +241,7 @@ export function createReflectionGraph(config: GraphConfig) {
             : JSON.stringify(lastMessage.content);
 
         console.log(`\n--- PLANNER: Creating plan for: ${truncateOutput(taskDescription, 100)} ---`);
+        console.log(`[Model Invocation] Using model: ${modelId}`);
 
         const plannerSystemPrompt = new SystemMessage(`You are a development planning agent.
 Given a task, create a clear step-by-step plan to accomplish it.
@@ -284,6 +304,7 @@ Only return the JSON array, nothing else.`);
         const { messages, plan, iterationCount } = state;
 
         console.log(`\n--- EXECUTOR: Working on task (iteration ${iterationCount + 1}) ---`);
+        console.log(`[Model Invocation] Using model: ${modelId}`);
 
         const pendingSteps = plan.filter(s => s.status === 'pending' || s.status === 'in_progress');
         const currentStep = pendingSteps[0]?.step || "Complete the task";
@@ -347,6 +368,7 @@ After using tools, provide a brief summary of what you accomplished.`);
         const { messages, taskDescription, iterationCount, plan, toolResults } = state;
 
         console.log(`\n--- REFLECTOR: Analyzing execution results ---`);
+        console.log(`[Model Invocation] Using model: ${modelId}`);
 
         const reflectorSystemPrompt = new SystemMessage(`You are a quality assurance agent reviewing development work.
 
@@ -380,6 +402,9 @@ Only return the JSON object, nothing else.`);
 
         try {
             const content = response.content as string;
+            // Log raw content for debugging
+            console.log(`[Reflector] Raw content: ${truncateOutput(content, 200)}`);
+
             const jsonMatch = content.match(/\{[\s\S]*\}/);
             if (jsonMatch) {
                 const parsed = JSON.parse(jsonMatch[0]);
@@ -387,10 +412,17 @@ Only return the JSON object, nothing else.`);
                 issues = parsed.issues || "None";
                 suggestions = parsed.suggestions || "None";
                 isComplete = parsed.isComplete === true;
+            } else {
+                console.log("[Reflector] No JSON found, using raw content fallback");
+                analysis = content;
+                // Simple heuristic for completion if model doesn't follow JSON format
+                if (content.toLowerCase().includes("task complete") || content.toLowerCase().includes("no issues")) {
+                    isComplete = true; // Optimistic completion if it looks good
+                }
             }
         } catch (e) {
             console.error("[Reflector] Parsing failed:", e);
-            analysis = "Completed current iteration";
+            analysis = "Completed current iteration (Parsing Error)";
             isComplete = iterationCount >= MAX_ITERATIONS;
         }
 
@@ -427,6 +459,7 @@ ${suggestions !== "None" ? `💡 **Suggestions:** ${suggestions}` : ""}
         const { messages, reflection, errors } = state;
 
         console.log(`\n--- REVISER: Addressing feedback and making improvements ---`);
+        console.log(`[Model Invocation] Using model: ${modelId}`);
 
         const reviserSystemPrompt = new SystemMessage(`You are a code revision agent.
 Based on the feedback provided, make improvements to address the issues.

@@ -65,9 +65,16 @@ export async function POST(req: Request) {
         let input: { messages: (HumanMessage | AIMessage | ToolMessage)[] } | null = null;
         const config = { configurable: { thread_id: threadId } };
 
+        // Track the toolCallId when resuming from HITL approval
+        let resumedToolCallId: string | undefined;
+
         if (lastMessage.role === 'tool') {
             // Tool result (Human-in-the-Loop approval)
-            console.log(`[API] Processing tool result: ${lastMessage.toolCallId}`);
+            console.log(`[API] Processing tool message. Full message:`, JSON.stringify(lastMessage));
+            console.log(`[API] Extracted toolCallId: ${lastMessage.toolCallId}`);
+
+            // Store the toolCallId for use in the stream
+            resumedToolCallId = lastMessage.toolCallId;
 
             // "Approved" means "Execute the real tool"
             // So we DO NOT add this message to the state, we just resume
@@ -151,7 +158,7 @@ export async function POST(req: Request) {
             );
 
             return createUIMessageStreamResponse({
-                stream: processStream(streamEvents, autoApprove)
+                stream: processStream(streamEvents, autoApprove, resumedToolCallId)
             });
         } else {
             const result = await graph.invoke(
@@ -249,13 +256,39 @@ interface StreamEvent {
     };
 }
 
-function processStream(stream: AsyncIterable<StreamEvent>, autoApprove: boolean): ReadableStream<UIMessageChunk> {
+function processStream(
+    stream: AsyncIterable<StreamEvent>,
+    autoApprove: boolean,
+    resumedToolCallId?: string
+): ReadableStream<UIMessageChunk> {
     return new ReadableStream({
         async start(controller) {
             let partCounter = 0;
             let currentPartId = "";
             let streamStarted = false;
             let currentPhase: AgentPhase = 'text';
+
+            // Flag to track if we're resuming from a HITL approval
+            // and need to use the original toolCallId
+            let isResumedFromApproval = !!resumedToolCallId;
+            let approvedToolId = resumedToolCallId;
+
+            // Debug logging
+            console.log("[DEBUG] processStream called with:", {
+                autoApprove,
+                resumedToolCallId,
+                isResumedFromApproval,
+                approvedToolId
+            });
+
+            // Track pending tool calls for HITL flow within the same request
+            // Maps tool name to the original toolCallId from on_chat_model_end
+            const pendingToolCalls = new Map<string, string>();
+
+            // Track if we've emitted any actual TEXT content (not reasoning)
+            // The AI SDK requires messages to have either TEXT or pending tool calls
+            // Reasoning parts and completed tool calls don't satisfy this requirement
+            let hasEmittedTextContent = false;
 
             const safeEnqueue = (chunk: UIMessageChunk) => {
                 try {
@@ -268,6 +301,19 @@ function processStream(stream: AsyncIterable<StreamEvent>, autoApprove: boolean)
 
             try {
                 if (!safeEnqueue({ type: 'start' })) return;
+
+                // When resuming from HITL approval, emit text content first
+                // The tool-input events will be emitted in on_tool_start for each tool
+                if (isResumedFromApproval && approvedToolId) {
+                    console.log("[DEBUG] HITL resume - emitting initial text for toolId:", approvedToolId);
+
+                    // Emit a text part first to ensure the message has content
+                    const resumePartId = `part-resume-${Date.now()}`;
+                    if (!safeEnqueue({ type: 'text-start', id: resumePartId })) return;
+                    if (!safeEnqueue({ type: 'text-delta', id: resumePartId, delta: 'Executing approved tool(s)...\n' })) return;
+                    if (!safeEnqueue({ type: 'text-end', id: resumePartId })) return;
+                    hasEmittedTextContent = true;
+                }
 
                 for await (const event of stream) {
                     try {
@@ -294,6 +340,10 @@ function processStream(stream: AsyncIterable<StreamEvent>, autoApprove: boolean)
                                     id: currentPartId,
                                     delta: phaseMarker,
                                 });
+                                // Only count as text content if it's actually a text part
+                                if (chunkType === 'text') {
+                                    hasEmittedTextContent = true;
+                                }
                             }
                         }
                         else if (event.event === "on_chat_model_stream") {
@@ -312,6 +362,10 @@ function processStream(stream: AsyncIterable<StreamEvent>, autoApprove: boolean)
                                     id: currentPartId,
                                     delta: text,
                                 })) break;
+                                // Only count as text content if it's actually a text part
+                                if (chunkType === 'text') {
+                                    hasEmittedTextContent = true;
+                                }
                             }
                         }
                         else if (event.event === "on_chat_model_end") {
@@ -326,6 +380,8 @@ function processStream(stream: AsyncIterable<StreamEvent>, autoApprove: boolean)
                                 if (toolCalls && toolCalls.length > 0) {
                                     for (const toolCall of toolCalls) {
                                         const toolId = toolCall.id || `tool-${Date.now()}`;
+                                        // Store the mapping for later use in on_tool_end
+                                        pendingToolCalls.set(toolCall.name, toolId);
                                         if (!safeEnqueue({ type: "tool-input-start", toolCallId: toolId, toolName: toolCall.name })) break;
                                         if (!safeEnqueue({ type: "tool-input-available", toolCallId: toolId, toolName: toolCall.name, input: toolCall.args })) break;
                                     }
@@ -340,13 +396,23 @@ function processStream(stream: AsyncIterable<StreamEvent>, autoApprove: boolean)
                                 tags: (event as any).tags
                             }));
                             const toolName = event.name || "";
+                            const args = event.data?.input || event.data?.args;
                             const toolId = runId || `t-${Date.now()}`;
 
                             if (autoApprove) {
-                                const args = event.data?.input || event.data?.args;
+                                // For autoApprove mode, emit tool-input events with run_id
+                                if (!safeEnqueue({ type: "tool-input-start", toolCallId: toolId, toolName })) break;
+                                if (!safeEnqueue({ type: "tool-input-available", toolCallId: toolId, toolName, input: args || {} })) break;
+                            } else if (isResumedFromApproval) {
+                                // For HITL mode when resuming from approval:
+                                // We need to emit tool-input for EVERY tool, not just the first one
+                                // This handles cases where multiple tools were queued for execution
+                                console.log("[DEBUG] Emitting tool-input for HITL resumed tool:", toolId, toolName);
                                 if (!safeEnqueue({ type: "tool-input-start", toolCallId: toolId, toolName })) break;
                                 if (!safeEnqueue({ type: "tool-input-available", toolCallId: toolId, toolName, input: args || {} })) break;
                             }
+                            // For initial HITL request (not resumed), tool-input events 
+                            // are emitted in on_chat_model_end, so we skip here
                         }
                         else if (event.event === "on_tool_end") {
                             console.log("[DEBUG] on_tool_end event:", JSON.stringify({
@@ -355,7 +421,17 @@ function processStream(stream: AsyncIterable<StreamEvent>, autoApprove: boolean)
                                 metadata: event.metadata,
                                 tags: (event as any).tags
                             }));
-                            const toolId = runId || "";
+
+                            const toolName = event.name || "";
+                            let toolId = runId || "";
+
+                            // For HITL resumed flow and autoApprove, use run_id (matches on_tool_start)
+                            // For initial HITL request, use the pending tool call ID from on_chat_model_end
+                            if (!autoApprove && !isResumedFromApproval && pendingToolCalls.has(toolName)) {
+                                toolId = pendingToolCalls.get(toolName)!;
+                                pendingToolCalls.delete(toolName);
+                            }
+
                             if (toolId) {
                                 const output = event.data?.output;
                                 const outputContent = typeof output === 'object' && output !== null && 'content' in output
@@ -368,6 +444,16 @@ function processStream(stream: AsyncIterable<StreamEvent>, autoApprove: boolean)
                     } catch (innerError) {
                         console.error("Stream event processing error:", innerError);
                     }
+                }
+
+                // If we haven't emitted any content yet, emit a minimal text part
+                // This is required because the AI SDK expects messages to have either text or tool calls
+                if (!hasEmittedTextContent) {
+                    console.log("[DEBUG] No content emitted, adding placeholder text");
+                    const emptyPartId = `part-empty-${Date.now()}`;
+                    safeEnqueue({ type: 'text-start', id: emptyPartId });
+                    safeEnqueue({ type: 'text-delta', id: emptyPartId, delta: ' ' });
+                    safeEnqueue({ type: 'text-end', id: emptyPartId });
                 }
 
                 // Only close if we haven't encountered a write error (which implies cancellation)

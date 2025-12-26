@@ -12,12 +12,34 @@ import { ToolNode } from "@langchain/langgraph/prebuilt";
 
 // --- State Definition ---
 import { FileSaver } from "./file-saver";
+// import { DynamoDBSaver } from "./dynamo-saver"; // Removed
+import { DynamoDBSaver } from "@rwai/langgraphjs-checkpoint-dynamodb";
+import { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint";
 
 // --- State Definition ---
-// Shared checkpointer for the session (backed by file system)
+// Shared checkpointer for the session (backed by file system or DynamoDB)
 // Usage of globalThis ensures the checkpointer survives Next.js hot reloads in dev mode
-const globalForCheckpointer = globalThis as unknown as { checkpointer: FileSaver };
-const checkpointer = globalForCheckpointer.checkpointer || new FileSaver();
+const globalForCheckpointer = globalThis as unknown as { checkpointer: BaseCheckpointSaver };
+
+function getCheckpointer() {
+    if (globalForCheckpointer.checkpointer) return globalForCheckpointer.checkpointer;
+
+    if (process.env.DYNAMODB_CHECKPOINT_TABLE && process.env.DYNAMODB_WRITES_TABLE) {
+        console.log("Using DynamoDB Checkpointer with tables:", process.env.DYNAMODB_CHECKPOINT_TABLE, process.env.DYNAMODB_WRITES_TABLE);
+        return new DynamoDBSaver({
+            clientConfig: {
+                region: 'us-east-1'
+            },
+            checkpointsTableName: process.env.DYNAMODB_CHECKPOINT_TABLE,
+            writesTableName: process.env.DYNAMODB_WRITES_TABLE
+        });
+    }
+
+    console.log("Using FileSystem Checkpointer");
+    return new FileSaver();
+}
+
+const checkpointer = getCheckpointer();
 if (process.env.NODE_ENV !== "production") globalForCheckpointer.checkpointer = checkpointer;
 
 export interface PlanStep {

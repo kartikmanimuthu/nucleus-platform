@@ -4,7 +4,7 @@ import { MemorySaver } from "@langchain/langgraph";
 import { RunnableConfig } from "@langchain/core/runnables";
 import { Checkpoint, CheckpointMetadata, CheckpointTuple } from "@langchain/langgraph-checkpoint";
 
-const DATA_DIR = path.join(process.cwd(), 'data');
+const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), 'data');
 
 // Ensure data directory exists
 if (!fs.existsSync(DATA_DIR)) {

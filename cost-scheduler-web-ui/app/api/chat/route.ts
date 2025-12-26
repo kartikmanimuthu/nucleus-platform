@@ -203,12 +203,16 @@ function getPhaseMarker(phase: AgentPhase): string {
 
 interface StreamEvent {
     event: string;
+    run_id?: string;
+    name?: string; // Added this line
     metadata?: {
         langgraph_node?: string;
     };
     data?: {
         chunk?: {
             content: string | Array<{ type: string; text: string }>;
+            id?: string;
+            tool_call_chunks?: Array<any>;
         };
         output?: {
             tool_calls?: Array<{
@@ -217,10 +221,8 @@ interface StreamEvent {
                 args: Record<string, unknown>;
             }>;
         };
-        name?: string;
-        id?: string;
-        input?: Record<string, unknown>;
-        args?: Record<string, unknown>;
+        input?: any;
+        args?: any;
     };
 }
 
@@ -231,15 +233,14 @@ function processStream(stream: AsyncIterable<StreamEvent>, autoApprove: boolean)
             let currentPartId = "";
             let streamStarted = false;
             let currentPhase: AgentPhase = 'text';
-            let activeNode: string = "";
 
             const safeEnqueue = (chunk: UIMessageChunk) => {
                 try {
                     controller.enqueue(chunk);
+                    return true;
                 } catch (e) {
                     return false;
                 }
-                return true;
             };
 
             try {
@@ -247,26 +248,26 @@ function processStream(stream: AsyncIterable<StreamEvent>, autoApprove: boolean)
 
                 for await (const event of stream) {
                     try {
+                        const runId = event.run_id || "";
+
                         if (event.event === "on_chat_model_start") {
                             const node = event.metadata?.langgraph_node;
-                            activeNode = node || "";
                             currentPhase = getPhaseFromNode(node || "");
 
+                            // Ensure unique IDs per chat model run to avoid index conflicts
                             partCounter++;
-                            currentPartId = partCounter.toString();
+                            currentPartId = `part-${runId}-${partCounter}`;
                             streamStarted = false;
 
-                            // Use 'reasoning' type for all phases except final text
                             const chunkType = currentPhase !== 'text' ? 'reasoning' : 'text';
 
-                            if (!safeEnqueue({ type: `${chunkType}-start` as 'reasoning-start' | 'text-start', id: currentPartId })) break;
+                            if (!safeEnqueue({ type: `${chunkType}-start` as any, id: currentPartId })) break;
                             streamStarted = true;
 
-                            // Inject phase marker
                             const phaseMarker = getPhaseMarker(currentPhase);
-                            if (phaseMarker && streamStarted) {
+                            if (phaseMarker) {
                                 safeEnqueue({
-                                    type: `${chunkType}-delta` as 'reasoning-delta' | 'text-delta',
+                                    type: `${chunkType}-delta` as any,
                                     id: currentPartId,
                                     delta: phaseMarker,
                                 });
@@ -278,16 +279,13 @@ function processStream(stream: AsyncIterable<StreamEvent>, autoApprove: boolean)
                             if (typeof content === "string") {
                                 text = content;
                             } else if (Array.isArray(content)) {
-                                text = content
-                                    .filter((c) => c.type === 'text')
-                                    .map((c) => c.text)
-                                    .join('');
+                                text = content.filter((c) => c.type === 'text').map((c) => c.text).join('');
                             }
 
                             if (text && streamStarted) {
                                 const chunkType = currentPhase !== 'text' ? 'reasoning' : 'text';
                                 if (!safeEnqueue({
-                                    type: `${chunkType}-delta` as 'reasoning-delta' | 'text-delta',
+                                    type: `${chunkType}-delta` as any,
                                     id: currentPartId,
                                     delta: text,
                                 })) break;
@@ -296,98 +294,52 @@ function processStream(stream: AsyncIterable<StreamEvent>, autoApprove: boolean)
                         else if (event.event === "on_chat_model_end") {
                             if (streamStarted) {
                                 const chunkType = currentPhase !== 'text' ? 'reasoning' : 'text';
-                                if (!safeEnqueue({ type: `${chunkType}-end` as 'reasoning-end' | 'text-end', id: currentPartId })) break;
+                                if (!safeEnqueue({ type: `${chunkType}-end` as any, id: currentPartId })) break;
                                 streamStarted = false;
                             }
 
-                            // When autoApprove is OFF, emit tool approval requests
-                            // (Graph will be interrupted before tools node)
                             if (!autoApprove) {
-                                const output = event.data?.output;
-                                if (output && output.tool_calls && output.tool_calls.length > 0) {
-                                    console.log(`🛑 [Stream] Pausing for Human Approval: ${output.tool_calls.length} tools pending.`);
-
-                                    for (const toolCall of output.tool_calls) {
+                                const toolCalls = event.data?.output?.tool_calls;
+                                if (toolCalls && toolCalls.length > 0) {
+                                    for (const toolCall of toolCalls) {
                                         const toolId = toolCall.id || `tool-${Date.now()}`;
-                                        const toolName = toolCall.name;
-                                        const toolArgs = toolCall.args;
-
-                                        console.log(`   ❓ Requesting approval for: ${toolName}`);
-                                        if (!safeEnqueue({
-                                            type: "tool-input-start",
-                                            toolCallId: toolId,
-                                            toolName: toolName,
-                                        })) break;
-
-                                        // Emit tool-input-available (this shows the approval UI)
-                                        if (!safeEnqueue({
-                                            type: "tool-input-available",
-                                            toolCallId: toolId,
-                                            toolName: toolName,
-                                            input: toolArgs,
-                                        })) break;
+                                        if (!safeEnqueue({ type: "tool-input-start", toolCallId: toolId, toolName: toolCall.name })) break;
+                                        if (!safeEnqueue({ type: "tool-input-available", toolCallId: toolId, toolName: toolCall.name, input: toolCall.args })) break;
                                     }
                                 }
                             }
                         }
                         else if (event.event === "on_tool_start") {
-                            const { name, id } = event.data || {};
-                            console.log(`▶️  [Stream] Tool Start: ${name} (ID: ${id})`);
+                            const toolName = event.name || "";
+                            const toolId = runId || `t-${Date.now()}`;
 
-                            // When auto-approve is ON, emit tool events for display
-                            if (autoApprove && id) {
+                            if (autoApprove) {
                                 const args = event.data?.input || event.data?.args;
-
-                                if (!safeEnqueue({
-                                    type: "tool-input-start",
-                                    toolCallId: id,
-                                    toolName: name || '',
-                                })) break;
-
-                                if (!safeEnqueue({
-                                    type: "tool-input-available",
-                                    toolCallId: id,
-                                    toolName: name || '',
-                                    input: args || {},
-                                })) break;
+                                if (!safeEnqueue({ type: "tool-input-start", toolCallId: toolId, toolName })) break;
+                                if (!safeEnqueue({ type: "tool-input-available", toolCallId: toolId, toolName, input: args || {} })) break;
                             }
                         }
                         else if (event.event === "on_tool_end") {
-                            const { output, id } = event.data || {};
-                            console.log(`◀️  [Stream] Tool End: ${id}`);
-
-                            if (id) {
+                            const toolId = runId || "";
+                            if (toolId) {
+                                const output = event.data?.output;
                                 const outputContent = typeof output === 'object' && output !== null && 'content' in output
                                     ? (output as { content: string }).content
-                                    : output || "";
+                                    : (typeof output === 'string' ? output : JSON.stringify(output));
 
-                                if (!safeEnqueue({
-                                    type: "tool-output-available",
-                                    toolCallId: id,
-                                    output: outputContent,
-                                })) break;
+                                if (!safeEnqueue({ type: "tool-output-available", toolCallId: toolId, output: outputContent })) break;
                             }
                         }
                     } catch (innerError) {
-                        console.error("Stream event error:", innerError);
-                        break;
+                        console.error("Stream event processing error:", innerError);
                     }
                 }
 
                 safeEnqueue({ type: 'finish' });
-
-                try {
-                    controller.close();
-                } catch (e) {
-                    // Controller already closed
-                }
+                controller.close();
             } catch (error) {
-                console.error("Stream processing loop error:", error);
-                try {
-                    controller.error(error);
-                } catch (e) {
-                    // Controller already errored
-                }
+                console.error("Main stream error:", error);
+                controller.error(error);
             }
         }
     });

@@ -9,7 +9,7 @@ export interface Thread {
     model?: string;
 }
 
-const DATA_DIR = path.join(process.cwd(), 'data');
+const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), 'data');
 const THREADS_FILE = path.join(DATA_DIR, 'threads.json');
 
 // Ensure data directory exists

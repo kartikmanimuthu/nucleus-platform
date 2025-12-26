@@ -11,8 +11,8 @@
     "cdk": "cdk",
     "deploy:backend": "cdk deploy CostEfficientSchedulerStack --app \"npx ts-node --prefer-ts-exts bin/cdkStack.ts\"",
     "destroy:backend": "cdk destroy CostEfficientSchedulerStack --app \"npx ts-node --prefer-ts-exts bin/cdkStack.ts\"",
-    "deploy:webui": "cdk deploy WebUIStack --app \"npx ts-node --prefer-ts-exts bin/webUIApp.ts\"",
-    "destroy:webui": "cdk destroy WebUIStack --app \"npx ts-node --prefer-ts-exts bin/webUIApp.ts\""
+    "deploy:webui": "cdk deploy WebUIStack --app \"npx ts-node --prefer-ts-exts bin/cdkStack.ts\"",
+    "destroy:webui": "cdk destroy WebUIStack --app \"npx ts-node --prefer-ts-exts bin/cdkStack.ts\""
   },
   "devDependencies": {
     "@types/jest": "^29.5.12",

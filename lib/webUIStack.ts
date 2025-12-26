@@ -32,6 +32,8 @@ export class WebUIStack extends cdk.Stack {
         // New Table Names
         const appTableName = `${SCHEDULER_NAME}-app-table`;
         const auditTableName = `${SCHEDULER_NAME}-audit-table`;
+        const checkpointTableName = `${SCHEDULER_NAME}-checkpoints-table`;
+        const writesTableName = `${SCHEDULER_NAME}-checkpoint-writes-v2-table`;
 
         // ============================================================================
         // DYNAMODB TABLES
@@ -60,6 +62,49 @@ export class WebUIStack extends cdk.Stack {
                 type: dynamodb.AttributeType.STRING,
             },
             projectionType: dynamodb.ProjectionType.ALL,
+        });
+
+        // Create DynamoDB table for LangGraph checkpoints
+        const checkpointTable = new dynamodb.Table(this, 'CheckpointTable', {
+            tableName: checkpointTableName,
+            partitionKey: {
+                name: 'thread_id',
+                type: dynamodb.AttributeType.STRING,
+            },
+            sortKey: {
+                name: 'checkpoint_id',
+                type: dynamodb.AttributeType.STRING,
+            },
+            billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+            removalPolicy: cdk.RemovalPolicy.DESTROY,
+        });
+
+        // Create DynamoDB table for LangGraph writes
+        const writesTable = new dynamodb.Table(this, 'WritesTable', {
+            tableName: writesTableName,
+            partitionKey: {
+                name: 'thread_id_checkpoint_id_checkpoint_ns',
+                type: dynamodb.AttributeType.STRING,
+            },
+            sortKey: {
+                name: 'task_id_idx',
+                type: dynamodb.AttributeType.STRING,
+            },
+            // GSI for writes as per recommendation/common pattern might be needed, 
+            // but standard KV access is usually enough for basic usage. 
+            // Sticking to basic definition unless library docs specify indices.
+            // (Library uses thread_id, checkpoint_id, task_id, idx usually in single table or similar)
+            // Assuming standard PK/SK for the writes table as well:
+            // The library code suggests:
+            // Checkpoints: thread_id (PK), checkpoint_id (SK)
+            // Writes: thread_id (PK), checkpoint_id (SK), and then specific attributes like task_id, idx, etc.
+            // Since we can't define complex composite keys in Dynamo besides PK/SK, we stick to PK/SK.
+            // However, writes might need to be queried by checkpoint. 
+            // Let's ensure strict schema match if possible.
+            // Re-reading usage: "One table for storing checkpoints and one table for storing writes"
+            // The library code likely handles the schema details if we just provide the table.
+            billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+            removalPolicy: cdk.RemovalPolicy.DESTROY,
         });
 
         // ============================================================================
@@ -139,6 +184,28 @@ export class WebUIStack extends cdk.Stack {
             })
         );
 
+        // Add DynamoDB permissions for Checkpoint table
+        webUILambdaExecutionRole.addToPolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: [
+                    "dynamodb:GetItem",
+                    "dynamodb:PutItem",
+                    "dynamodb:UpdateItem",
+                    "dynamodb:DeleteItem",
+                    "dynamodb:Query",
+                    "dynamodb:BatchWriteItem",
+                    "dynamodb:BatchGetItem",
+                ],
+                resources: [
+                    `arn:aws:dynamodb:${this.region}:${this.account}:table/${checkpointTableName}`,
+                    `arn:aws:dynamodb:${this.region}:${this.account}:table/${checkpointTableName}/index/*`,
+                    `arn:aws:dynamodb:${this.region}:${this.account}:table/${writesTableName}`,
+                    `arn:aws:dynamodb:${this.region}:${this.account}:table/${writesTableName}/index/*`,
+                ],
+            })
+        );
+
         // Add STS permissions for the Lambda to assume roles and generate temporary credentials
         webUILambdaExecutionRole.addToPolicy(
             new iam.PolicyStatement({
@@ -169,6 +236,19 @@ export class WebUIStack extends cdk.Stack {
                 resources: [
                     `arn:aws:s3:::*`,
                 ],
+            })
+        );
+
+        // Add Bedrock permissions
+        webUILambdaExecutionRole.addToPolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: [
+                    "bedrock:InvokeModel",
+                    "bedrock:InvokeModelWithResponseStream",
+                    "bedrock:ListFoundationModels"
+                ],
+                resources: ["*"],
             })
         );
 
@@ -391,6 +471,8 @@ export class WebUIStack extends cdk.Stack {
                 NEXT_PUBLIC_APP_TABLE_NAME: appTableName,
                 AUDIT_TABLE_NAME: auditTableName,
                 NEXT_PUBLIC_AUDIT_TABLE_NAME: auditTableName,
+                DYNAMODB_CHECKPOINT_TABLE: checkpointTableName,
+                DYNAMODB_WRITES_TABLE: writesTableName,
                 DYNAMODB_USERS_TEAMS_TABLE: usersTeamsTable.tableName,
                 // Cognito Configuration for NextAuth
                 COGNITO_USER_POOL_ID: this.userPool.userPoolId,
@@ -420,10 +502,12 @@ export class WebUIStack extends cdk.Stack {
                 // Cognito App Client credentials
                 COGNITO_APP_CLIENT_ID: this.userPoolClient.userPoolClientId,
                 COGNITO_APP_CLIENT_SECRET: this.userPoolClient.userPoolClientSecret?.unsafeUnwrap() || '',
+                // Storage Configuration
+                DATA_DIR: '/tmp',
             },
             role: webUILambdaExecutionRole,
-            timeout: cdk.Duration.seconds(60),
-            memorySize: 1024,
+            timeout: cdk.Duration.seconds(300),
+            memorySize: 2048,
             architecture: lambda.Architecture.X86_64,
             logRetention: logs.RetentionDays.ONE_WEEK,
         });
@@ -436,6 +520,7 @@ export class WebUIStack extends cdk.Stack {
 
         const lambdaFunctionUrl = new lambda.FunctionUrl(this, 'WebUIFunctionUrl', {
             function: webUILambdaFunction,
+            invokeMode: lambda.InvokeMode.RESPONSE_STREAM,
             cors: {
                 allowedHeaders: [
                     'Content-Type', 'X-Amz-Date', 'Authorization', 'X-Api-Key',
@@ -565,6 +650,16 @@ export class WebUIStack extends cdk.Stack {
         new cdk.CfnOutput(this, 'AuditTableName', {
             value: auditTableName,
             description: 'Nucleus Audit Table Name',
+        });
+
+        new cdk.CfnOutput(this, 'CheckpointTableName', {
+            value: checkpointTableName,
+            description: 'LangGraph Checkpoint Table Name',
+        });
+
+        new cdk.CfnOutput(this, 'WritesTableName', {
+            value: writesTableName,
+            description: 'LangGraph Writes Table Name',
         });
     }
 }

@@ -41,6 +41,7 @@ COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:0.8.4 /lambda-adapter /opt
 
 # Set environment variables
 ENV PORT=8080 \
+    AWS_LWA_INVOKE_MODE=response_stream \
     NODE_ENV=production \
     AWS_LWA_ENABLE_COMPRESSION=true \
     NEXT_TELEMETRY_DISABLED=1 \

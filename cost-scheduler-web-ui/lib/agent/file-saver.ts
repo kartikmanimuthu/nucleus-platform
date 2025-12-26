@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { MemorySaver } from "@langchain/langgraph";
 import { RunnableConfig } from "@langchain/core/runnables";
-import { Checkpoint, CheckpointMetadata, CheckpointTuple } from "@langchain/langgraph-checkpoint";
+import { Checkpoint, CheckpointMetadata, CheckpointTuple, SerializerProtocol } from "@langchain/langgraph-checkpoint";
 
 const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), 'data');
 
@@ -11,30 +11,74 @@ if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
+interface SavedCheckpoint {
+    checkpoint: Checkpoint;
+    metadata: CheckpointMetadata;
+    newVersions?: any;
+}
+
+interface SavedWrites {
+    checkpointId: string;
+    writes: any[];
+    taskId: string;
+}
+
 export class FileSaver extends MemorySaver {
-    constructor() {
-        super();
+    private hydratedThreads = new Set<string>();
+
+    constructor(serde?: SerializerProtocol) {
+        super(serde);
     }
 
-    private getFilePath(threadId: string): string {
+    private getCheckpointPath(threadId: string): string {
         const safeId = threadId.replace(/[^a-z0-9-]/gi, '_');
         return path.join(DATA_DIR, `checkpoint_${safeId}.json`);
     }
 
-    private async saveToDisk(threadId: string, checkpoint: Checkpoint, metadata: CheckpointMetadata) {
-        const fp = this.getFilePath(threadId);
-        let data: Record<string, any> = {};
+    private getWritesPath(threadId: string): string {
+        const safeId = threadId.replace(/[^a-z0-9-]/gi, '_');
+        return path.join(DATA_DIR, `writes_${safeId}.json`);
+    }
 
-        if (fs.existsSync(fp)) {
+    private async hydrate(threadId: string) {
+        if (this.hydratedThreads.has(threadId)) return;
+
+        // Load Checkpoints
+        const cpPath = this.getCheckpointPath(threadId);
+        if (fs.existsSync(cpPath)) {
             try {
-                data = JSON.parse(fs.readFileSync(fp, 'utf-8'));
+                const data: Record<string, SavedCheckpoint> = JSON.parse(fs.readFileSync(cpPath, 'utf-8'));
+                for (const [k, v] of Object.entries(data)) {
+                    const config = { configurable: { thread_id: threadId } };
+                    // @ts-ignore
+                    await super.put(config, v.checkpoint, v.metadata, v.newVersions || {});
+                }
             } catch (e) {
-                // Ignore corrupt file
+                console.error(`Failed to hydrate checkpoints for ${threadId}:`, e);
             }
         }
 
-        data[checkpoint.id] = { checkpoint, metadata };
-        fs.writeFileSync(fp, JSON.stringify(data, null, 2));
+        // Load Writes
+        const wPath = this.getWritesPath(threadId);
+        if (fs.existsSync(wPath)) {
+            try {
+                const data: SavedWrites[] = JSON.parse(fs.readFileSync(wPath, 'utf-8'));
+                for (const w of data) {
+                    const config = { configurable: { thread_id: threadId, checkpoint_id: w.checkpointId } };
+                    await super.putWrites(config, w.writes, w.taskId);
+                }
+            } catch (e) {
+                console.error(`Failed to hydrate writes for ${threadId}:`, e);
+            }
+        }
+
+        this.hydratedThreads.add(threadId);
+    }
+
+    async getTuple(config: RunnableConfig): Promise<CheckpointTuple | undefined> {
+        const threadId = config.configurable?.thread_id;
+        if (threadId) await this.hydrate(threadId);
+        return super.getTuple(config);
     }
 
     async put(
@@ -43,82 +87,55 @@ export class FileSaver extends MemorySaver {
         metadata: CheckpointMetadata,
         newVersions?: any
     ): Promise<RunnableConfig> {
-        // Call super to handle in-memory logic
-        // We use typical call pattern. If types mismatch in strict mode, we cast or ignore.
-        let result;
-        try {
-            // @ts-ignore
-            result = await super.put(config, checkpoint, metadata, newVersions);
-        } catch (e) {
-            // Fallback if 4 args not supported
-            // @ts-ignore
-            result = await super.put(config, checkpoint, metadata);
-        }
+        // @ts-ignore
+        const result = await super.put(config, checkpoint, metadata, newVersions);
 
         const threadId = config.configurable?.thread_id;
         if (threadId) {
-            await this.saveToDisk(threadId, checkpoint, metadata);
+            const cpPath = this.getCheckpointPath(threadId);
+            let data: Record<string, SavedCheckpoint> = {};
+            if (fs.existsSync(cpPath)) {
+                try {
+                    data = JSON.parse(fs.readFileSync(cpPath, 'utf-8'));
+                } catch (e) { }
+            }
+            data[checkpoint.id] = { checkpoint, metadata, newVersions };
+            fs.writeFileSync(cpPath, JSON.stringify(data, null, 2));
         }
 
         return result;
     }
 
-    async get(config: RunnableConfig): Promise<Checkpoint | undefined> {
-        const fromSuper = await super.get(config);
-        if (fromSuper) return fromSuper;
+    async putWrites(
+        config: RunnableConfig,
+        writes: any[],
+        taskId: string
+    ): Promise<void> {
+        await super.putWrites(config, writes, taskId);
 
         const threadId = config.configurable?.thread_id;
-        if (threadId) {
-            const fp = this.getFilePath(threadId);
-            if (!fs.existsSync(fp)) return undefined;
+        const checkpointId = config.configurable?.checkpoint_id;
 
-            try {
-                const fileContent = fs.readFileSync(fp, 'utf-8');
-                const data = JSON.parse(fileContent);
-
-                const checkpointId = config.configurable?.checkpoint_id;
-                if (checkpointId) {
-                    const entry = data[checkpointId];
-                    if (entry) return entry.checkpoint;
-                } else {
-                    const keys = Object.keys(data);
-                    if (keys.length === 0) return undefined;
-                    const lastKey = keys[keys.length - 1];
-                    return data[lastKey]?.checkpoint;
-                }
-            } catch (e) {
-                return undefined;
+        if (threadId && checkpointId) {
+            const wPath = this.getWritesPath(threadId);
+            let data: SavedWrites[] = [];
+            if (fs.existsSync(wPath)) {
+                try {
+                    data = JSON.parse(fs.readFileSync(wPath, 'utf-8'));
+                } catch (e) { }
             }
+            data.push({ checkpointId, writes, taskId });
+            fs.writeFileSync(wPath, JSON.stringify(data, null, 2));
         }
-        return undefined;
     }
 
-    // @ts-ignore
     async *list(
         config: RunnableConfig,
         options?: any,
         before?: any
     ): AsyncGenerator<CheckpointTuple> {
         const threadId = config.configurable?.thread_id;
-        if (threadId) {
-            const fp = this.getFilePath(threadId);
-            if (fs.existsSync(fp)) {
-                try {
-                    const data = JSON.parse(fs.readFileSync(fp, 'utf-8'));
-                    for (const key in data) {
-                        const entry = data[key];
-                        yield {
-                            config: { configurable: { thread_id: threadId, checkpoint_id: key } },
-                            checkpoint: entry.checkpoint,
-                            metadata: entry.metadata,
-                            parentConfig: entry.parentConfig
-                        } as CheckpointTuple;
-                    }
-                } catch (e) { }
-            }
-        }
-
-        // Fallback to super
+        if (threadId) await this.hydrate(threadId);
         // @ts-ignore
         yield* super.list(config, options, before);
     }

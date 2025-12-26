@@ -355,8 +355,8 @@ Available tools:
 - execute_command(command): Execute a shell command
 - web_search(query): Search the web for information
 
-IMPORTANT: You MUST use tools to accomplish the task. Do not just describe what you would do.
-After using tools, provide a brief summary of what you accomplished.`);
+IMPORTANT: You should use tools to accomplish the task if necessary. If the task is a simple question or greeting that doesn't require tools, you may answer directly.
+After using tools (or if no tools are needed), provide a brief summary of what you accomplished or the answer.`);
 
         const response = await modelWithTools.invoke([executorSystemPrompt, ...getRecentMessages(messages, 10)]);
 
@@ -459,9 +459,15 @@ Only return the JSON object, nothing else.`);
                 console.log("[Reflector] No JSON found, using raw content fallback");
                 analysis = content;
                 // Simple heuristic for completion if model doesn't follow JSON format
-                if (content.toLowerCase().includes("task complete") || content.toLowerCase().includes("no issues")) {
+                if (content.toLowerCase().includes("task complete") || content.toLowerCase().includes("no issues") || issues === "None") {
                     isComplete = true; // Optimistic completion if it looks good
                 }
+            }
+
+            // Fallback for empty content or "None" issues even if parsed
+            if (issues === "None" && !isComplete) {
+                // Double check if analysis implies completion
+                isComplete = true;
             }
         } catch (e) {
             console.error("[Reflector] Parsing failed:", e);
@@ -589,13 +595,22 @@ ${summaryContent}`;
     }
 
     // --- CONDITIONAL EDGES ---
-    function shouldContinueFromGenerate(state: ReflectionState): "tools" | "reflect" {
+    function shouldContinueFromGenerate(state: ReflectionState): "tools" | "reflect" | "final" {
         const messages = state.messages;
         const lastMessage = messages[messages.length - 1] as AIMessage;
 
         if (lastMessage.tool_calls && lastMessage.tool_calls.length > 0) {
             return "tools";
         }
+
+        // Optimization: For simple requests (first iteration, no tools), skip reflection to speed up response
+        // This helps avoid 504 Gateway Timeouts on non-streaming responses.
+        const { iterationCount } = state;
+        if (iterationCount <= 1) {
+            console.log("⚡ [Fast Path] First iteration with no tools. Skipping reflection.");
+            return "final";
+        }
+
         return "reflect";
     }
 
@@ -642,7 +657,8 @@ ${summaryContent}`;
 
         .addConditionalEdges("generate", shouldContinueFromGenerate, {
             tools: "tools",
-            reflect: "reflect"
+            reflect: "reflect",
+            final: "final" // Added fast path
         })
 
         .addConditionalEdges("tools", shouldContinueFromTools, {

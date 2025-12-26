@@ -1,4 +1,5 @@
 import { HumanMessage, AIMessage, ToolMessage } from '@langchain/core/messages';
+import { NextResponse } from 'next/server';
 import { createUIMessageStreamResponse, UIMessageChunk } from 'ai';
 import { createReflectionGraph, createFastGraph } from '@/lib/agent/graph-factory';
 
@@ -24,7 +25,7 @@ interface Message {
 
 export async function POST(req: Request) {
     try {
-        const { messages, threadId: requestThreadId, autoApprove = true, model, mode = 'plan' } = await req.json();
+        const { messages, threadId: requestThreadId, autoApprove = true, model, mode = 'plan', stream = true } = await req.json();
         const threadId = requestThreadId || Date.now().toString();
 
         // Ensure thread exists in store
@@ -138,18 +139,40 @@ export async function POST(req: Request) {
             input = { messages: validMessages };
         }
 
-        const stream = await graph.streamEvents(
-            input,
-            {
-                version: "v2",
-                configurable: { thread_id: threadId },
-                recursionLimit: 100, // Higher limit for complex tasks with many tool calls
-            }
-        );
+        if (stream) {
+            // @ts-ignore
+            const streamEvents = await graph.streamEvents(
+                input as any,
+                {
+                    version: "v2",
+                    configurable: { thread_id: threadId },
+                    recursionLimit: 100, // Higher limit for complex tasks with many tool calls
+                }
+            );
 
-        return createUIMessageStreamResponse({
-            stream: processStream(stream, autoApprove)
-        });
+            return createUIMessageStreamResponse({
+                stream: processStream(streamEvents, autoApprove)
+            });
+        } else {
+            const result = await graph.invoke(
+                input,
+                {
+                    configurable: { thread_id: threadId },
+                    recursionLimit: 100,
+                }
+            );
+
+            // Extract the last message content
+            const lastMsg = result.messages[result.messages.length - 1];
+            let content = lastMsg.content;
+
+            // Also include tool calls if present, though likely handled by the loop if not simple text
+            return NextResponse.json({
+                role: 'assistant',
+                content: content,
+                // Include other relevant fields if necessary
+            });
+        }
 
     } catch (error) {
         console.error('[API Error]:', error);
@@ -310,6 +333,12 @@ function processStream(stream: AsyncIterable<StreamEvent>, autoApprove: boolean)
                             }
                         }
                         else if (event.event === "on_tool_start") {
+                            console.log("[DEBUG] on_tool_start event:", JSON.stringify({
+                                run_id: event.run_id,
+                                name: event.name,
+                                metadata: event.metadata,
+                                tags: (event as any).tags
+                            }));
                             const toolName = event.name || "";
                             const toolId = runId || `t-${Date.now()}`;
 
@@ -320,6 +349,12 @@ function processStream(stream: AsyncIterable<StreamEvent>, autoApprove: boolean)
                             }
                         }
                         else if (event.event === "on_tool_end") {
+                            console.log("[DEBUG] on_tool_end event:", JSON.stringify({
+                                run_id: event.run_id,
+                                name: event.name,
+                                metadata: event.metadata,
+                                tags: (event as any).tags
+                            }));
                             const toolId = runId || "";
                             if (toolId) {
                                 const output = event.data?.output;
@@ -335,11 +370,21 @@ function processStream(stream: AsyncIterable<StreamEvent>, autoApprove: boolean)
                     }
                 }
 
-                safeEnqueue({ type: 'finish' });
-                controller.close();
+                // Only close if we haven't encountered a write error (which implies cancellation)
+                if (safeEnqueue({ type: 'finish' })) {
+                    try {
+                        controller.close();
+                    } catch (e) {
+                        // Ignore if already closed
+                    }
+                }
             } catch (error) {
                 console.error("Main stream error:", error);
-                controller.error(error);
+                try {
+                    controller.error(error);
+                } catch (e) {
+                    // Ignore if already closed
+                }
             }
         }
     });

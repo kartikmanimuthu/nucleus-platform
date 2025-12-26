@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { ScheduleService } from '@/lib/schedule-service';
 import { AuditService } from '@/lib/audit-service';
-import { Schedule, UISchedule } from '@/lib/types';
+
 import { getServerSession } from 'next-auth';
 import { authOptions } from '../auth/[...nextauth]/route';
 

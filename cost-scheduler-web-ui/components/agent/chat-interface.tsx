@@ -11,6 +11,12 @@ import {
   Briefcase, Cpu, Check, X, Brain, RefreshCw, 
   Flag, ListChecks, Sparkles, Settings, Zap
 } from 'lucide-react';
+// Available modes
+const AGENT_MODES = [
+  { id: 'plan', label: 'Plan & Execute' },
+  { id: 'fast', label: 'Fast (ReAct)' },
+];
+
 import { useEffect, useRef, useState } from 'react';
 import { Task, TaskTrigger, TaskContent, TaskItem } from '@/components/ai-elements/task';
 import { 
@@ -120,6 +126,7 @@ export function ChatInterface({ threadId: initialThreadId }: ChatInterfaceProps)
   // Configuration state (before conversation starts)
   const [autoApprove, setAutoApprove] = useState(true);
   const [selectedModel, setSelectedModel] = useState(AVAILABLE_MODELS[0].id);
+  const [agentMode, setAgentMode] = useState('plan');
   const [hasStarted, setHasStarted] = useState(false);
 
   const { 
@@ -135,6 +142,7 @@ export function ChatInterface({ threadId: initialThreadId }: ChatInterfaceProps)
         threadId,
         autoApprove,
         model: selectedModel,
+        mode: agentMode,
     },
     onResponse: (response: Response) => {
         console.log('[ChatInterface] Received response headers:', response);
@@ -206,6 +214,7 @@ export function ChatInterface({ threadId: initialThreadId }: ChatInterfaceProps)
         threadId,
         autoApprove,
         model: selectedModel,
+        mode: agentMode,
       }
     });
   };
@@ -229,6 +238,7 @@ export function ChatInterface({ threadId: initialThreadId }: ChatInterfaceProps)
         threadId,
         autoApprove,
         model: selectedModel,
+        mode: agentMode,
       }
     });
   };
@@ -584,6 +594,21 @@ export function ChatInterface({ threadId: initialThreadId }: ChatInterfaceProps)
           {/* Footer: Controls & Send */}
           <div className="flex items-center justify-between px-3 py-2 border-t bg-muted/10">
             <div className="flex items-center gap-4">
+              <div className="flex items-center space-x-2">
+                 <Select value={agentMode} onValueChange={setAgentMode}>
+                    <SelectTrigger className="h-7 text-xs border-transparent bg-transparent hover:bg-muted/50 focus:ring-0 gap-1 px-2 w-auto min-w-[100px]">
+                      <SelectValue placeholder="Mode" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {AGENT_MODES.map((mode) => (
+                        <SelectItem key={mode.id} value={mode.id} className="text-xs">
+                          {mode.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+              </div>
+
               <div className="flex items-center space-x-2">
                 <Checkbox 
                   id="auto-approve-chat" 

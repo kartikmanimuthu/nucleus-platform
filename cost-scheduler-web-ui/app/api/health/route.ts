@@ -1,9 +1,22 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import { getDynamoDBDocumentClient, DYNAMODB_TABLE_NAME } from '@/lib/aws-config';
 import { ScanCommand } from '@aws-sdk/lib-dynamodb';
 
-export async function GET(req: NextRequest) {
-    const healthCheck: any = {
+interface HealthCheck {
+    status: string;
+    timestamp: string;
+    service: string;
+    environment: string;
+    aws: {
+        region: string | undefined;
+        tableName: string;
+        isLambda: boolean;
+        dynamodb?: string | { status: string; error: string };
+    };
+}
+
+export async function GET() {
+    const healthCheck: HealthCheck = {
         status: 'healthy',
         timestamp: new Date().toISOString(),
         service: 'cost-scheduler-web-ui',
@@ -52,6 +65,6 @@ export async function GET(req: NextRequest) {
     }
 }
 
-export async function HEAD(req: NextRequest) {
+export async function HEAD() {
     return new NextResponse(null, { status: 200 });
 }

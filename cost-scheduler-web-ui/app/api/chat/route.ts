@@ -1,6 +1,6 @@
 import { HumanMessage, AIMessage, ToolMessage } from '@langchain/core/messages';
 import { createUIMessageStreamResponse, UIMessageChunk } from 'ai';
-import { createReflectionGraph } from '@/lib/agent/graph-factory';
+import { createReflectionGraph, createFastGraph } from '@/lib/agent/graph-factory';
 
 export const maxDuration = 300; // 5 minutes for complex multi-iteration tasks
 
@@ -24,7 +24,7 @@ interface Message {
 
 export async function POST(req: Request) {
     try {
-        const { messages, threadId: requestThreadId, autoApprove = true, model } = await req.json();
+        const { messages, threadId: requestThreadId, autoApprove = true, model, mode = 'plan' } = await req.json();
         const threadId = requestThreadId || Date.now().toString();
 
         // Ensure thread exists in store
@@ -47,13 +47,18 @@ export async function POST(req: Request) {
         console.log(`   Thread ID:    ${threadId}`);
         console.log(`   Auto-Approve: ${autoApprove}`);
         console.log(`   Model:        ${model || 'Default'}`);
+        console.log(`   Mode:         ${mode}`);
         console.log(`   Timestamp:    ${new Date().toISOString()}`);
 
         // Create graph with configuration
-        const graph = createReflectionGraph({
+        const graphConfig = {
             model: model || 'global.anthropic.claude-sonnet-4-5-20250929-v1:0',
             autoApprove: autoApprove
-        });
+        };
+
+        const graph = mode === 'fast'
+            ? createFastGraph(graphConfig)
+            : createReflectionGraph(graphConfig);
 
         const lastMessage = messages[messages.length - 1];
         let input: { messages: (HumanMessage | AIMessage | ToolMessage)[] } | null = null;
@@ -172,6 +177,8 @@ function getPhaseFromNode(node: string): AgentPhase {
             return 'revision';
         case 'final':
             return 'final';
+        case 'agent':
+            return 'execution';
         default:
             return 'text';
     }

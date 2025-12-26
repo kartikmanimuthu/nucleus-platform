@@ -1,8 +1,7 @@
-
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import { generateOnboardingTemplate, generateOnboardingYaml } from '@/lib/cf-template-generator';
 
-export async function GET(request: NextRequest) {
+export async function GET(request: Request) {
     try {
         const { searchParams } = new URL(request.url);
         const targetAccountId = searchParams.get('targetAccountId') || undefined;
@@ -28,7 +27,7 @@ export async function GET(request: NextRequest) {
     }
 }
 
-export async function POST(request: NextRequest) {
+export async function POST(request: Request) {
     try {
         const body = await request.json();
         const { accountId, accountName, externalId: providedExternalId } = body;

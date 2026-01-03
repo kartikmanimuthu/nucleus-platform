@@ -141,7 +141,10 @@ export class CdkStack extends cdk.Stack {
     // New Policy Statement to allow assuming any role
     const assumeRolePolicy = new iam.PolicyStatement({
       actions: ['sts:AssumeRole'],
-      resources: [`arn:aws:iam::*:role/${CROSS_ACCOUNT_ROLE_NAME}`],
+      resources: [
+        `arn:aws:iam::*:role/${CROSS_ACCOUNT_ROLE_NAME}`,
+        `arn:aws:iam::*:role/NucleusAccess-*`
+      ],
       effect: iam.Effect.ALLOW,
     });
 
@@ -170,6 +173,8 @@ export class CdkStack extends cdk.Stack {
         CROSS_ACCOUNT_ROLE_ARN: lambdaRole.roleArn,
         SCHEDULER_TAG: SCHEDULER_TAG,
         SNS_TOPIC_ARN: snsTopic.topicArn,
+        HUB_ACCOUNT_ID: this.account,
+        NEXT_PUBLIC_HUB_ACCOUNT_ID: this.account,
       },
       role: lambdaRole,
       timeout: cdk.Duration.minutes(15), // Set timeout to 15 minutes (maximum allowed)
@@ -261,7 +266,10 @@ export class CdkStack extends cdk.Stack {
       description: 'The ARN of the SNS topic',
     });
 
+    this.schedulerLambdaFunctionArn = lambdaFunction.functionArn;
   }
+
+  public readonly schedulerLambdaFunctionArn: string;
 
   private generateScheduleExpression(interval: number): string {
     switch (interval) {

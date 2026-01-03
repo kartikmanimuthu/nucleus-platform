@@ -16,6 +16,8 @@ export interface Schedule {
         name?: string;
         arn?: string; // AWS ARN for the resource
     }>;
+    lastExecution?: string;
+    executionCount?: number;
     createdAt?: string;
     updatedAt?: string;
     createdBy?: string;

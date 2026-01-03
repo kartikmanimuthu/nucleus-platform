@@ -39,6 +39,7 @@ import {
 
 // Available models
 const AVAILABLE_MODELS = [
+  { id: 'moonshot.kimi-k2-thinking', label: 'Kimi K2 Thinking', provider: 'moonshot' },
   { id: 'global.anthropic.claude-sonnet-4-5-20250929-v1:0', label: 'Claude 4.5 Sonnet (Global)', provider: 'amazon' },
   { id: 'us.anthropic.claude-haiku-4-5-20251001-v1:0', label: 'Claude 4.5 Haiku (US)', provider: 'amazon' },
   { id: 'global.amazon.nova-2-lite-v1:0', label: 'Nova 2 Lite (Global)', provider: 'amazon' },

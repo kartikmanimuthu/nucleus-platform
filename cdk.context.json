@@ -5,11 +5,11 @@
     "enableCustomDomain": false,
     "domainName": "scheduler.acme.com",
     "certificateArn": "arn:aws:acm:us-east-1:0000000000000:certificate/40e55aff-447b-4953-b0d9-4655f3c963a4",
-    "fallbackDomainName": "https://d27l4ltu65owcu.cloudfront.net"
+    "fallbackDomainName": "https://d1wep6a714kqli.cloudfront.net"
   },
   "scheduler": {
     "name": "cost-optimization-scheduler",
-    "scheduleInterval": 60,
+    "scheduleInterval": 30,
     "crossAccountRoleName": "CrossAccountRoleForCostOptimizationScheduler",
     "schedulerTag": "cost-optimization-scheduler"
   },

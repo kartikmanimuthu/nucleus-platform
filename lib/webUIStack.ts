@@ -14,6 +14,10 @@ import { RemovalPolicy } from "aws-cdk-lib";
 import { Platform } from "aws-cdk-lib/aws-ecr-assets";
 import * as acm from "aws-cdk-lib/aws-certificatemanager";
 
+interface WebUIStackProps extends cdk.StackProps {
+    schedulerLambdaArn?: string;
+}
+
 export class WebUIStack extends cdk.Stack {
     public readonly webUiUrl: string;
     public readonly webUiLambdaFunctionName: string;
@@ -21,7 +25,7 @@ export class WebUIStack extends cdk.Stack {
     public readonly userPoolClient: cognito.UserPoolClient;
     public readonly identityPool: cognito.CfnIdentityPool;
 
-    constructor(scope: Construct, id: string, props?: cdk.StackProps) {
+    constructor(scope: Construct, id: string, props?: WebUIStackProps) {
         super(scope, id, props);
 
         // Context and Configuration
@@ -218,6 +222,7 @@ export class WebUIStack extends cdk.Stack {
                 ],
                 resources: [
                     "*",
+                    "arn:aws:iam::*:role/NucleusAccess-*",
                     `arn:aws:iam::${this.account}:role/*${SCHEDULER_NAME}*`,
                 ],
             })
@@ -455,7 +460,7 @@ export class WebUIStack extends cdk.Stack {
             handler: lambda.Handler.FROM_IMAGE,
             code: lambda.Code.fromAssetImage(path.join(__dirname, "../cost-scheduler-web-ui"), {
                 cmd: ["sh", "-c", "exec node server.js"],
-                platform: Platform.LINUX_AMD64,
+                platform: Platform.LINUX_ARM64,
             }),
             environment: {
                 NODE_ENV: 'production',
@@ -466,6 +471,8 @@ export class WebUIStack extends cdk.Stack {
                 AWS_LWA_READINESS_CHECK_PATH: '/api/health',
                 // AWS Configuration
                 NEXT_PUBLIC_AWS_REGION: this.region,
+                NEXT_PUBLIC_HUB_ACCOUNT_ID: this.account,
+                HUB_ACCOUNT_ID: this.account,
                 // DynamoDB Configuration
                 APP_TABLE_NAME: appTableName,
                 NEXT_PUBLIC_APP_TABLE_NAME: appTableName,
@@ -504,13 +511,24 @@ export class WebUIStack extends cdk.Stack {
                 COGNITO_APP_CLIENT_SECRET: this.userPoolClient.userPoolClientSecret?.unsafeUnwrap() || '',
                 // Storage Configuration
                 DATA_DIR: '/tmp',
+                // Scheduler Lambda ARN for ad-hoc execution
+                SCHEDULER_LAMBDA_ARN: props?.schedulerLambdaArn || '',
             },
             role: webUILambdaExecutionRole,
             timeout: cdk.Duration.seconds(300),
             memorySize: 2048,
-            architecture: lambda.Architecture.X86_64,
+            architecture: lambda.Architecture.ARM_64,
             logRetention: logs.RetentionDays.ONE_WEEK,
         });
+
+        // Grant permission to invoke the Scheduler Lambda
+        if (props?.schedulerLambdaArn) {
+            webUILambdaExecutionRole.addToPolicy(new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ['lambda:InvokeFunction'],
+                resources: [props.schedulerLambdaArn],
+            }));
+        }
 
         this.webUiLambdaFunctionName = webUILambdaFunction.functionName;
 

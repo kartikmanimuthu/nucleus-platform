@@ -236,7 +236,7 @@ export function EditAccountDialog({
                       roleArn: e.target.value,
                     }))
                   }
-                  placeholder="arn:aws:iam::123456789012:role/CostOptimizationRole"
+                  placeholder={`arn:aws:iam::123456789012:role/NucleusAccess-${process.env.NEXT_PUBLIC_HUB_ACCOUNT_ID || 'HUB_ACCOUNT_ID'}`}
                   required
                 />
                 <p className="text-xs text-muted-foreground">

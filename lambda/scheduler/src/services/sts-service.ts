@@ -30,6 +30,13 @@ export async function assumeRole(
     logger.debug(`Assuming role ${roleArn} for account ${accountId}`, { accountId, region });
 
     try {
+        logger.info(`Attempting to assume role: ${roleArn}`, {
+            accountId,
+            region,
+            roleSessionName,
+            hasExternalId: !!externalId
+        });
+
         const response = await client.send(new AssumeRoleCommand({
             RoleArn: roleArn,
             RoleSessionName: roleSessionName,

@@ -143,12 +143,13 @@ export async function runPartialScan(
     const executionId = uuidv4();
     const startTime = Date.now();
     const scheduleId = event.scheduleId || event.scheduleName;
+    const userEmail = event.userEmail;
 
     if (!scheduleId) {
         throw new Error('scheduleId or scheduleName is required for partial scan');
     }
 
-    logger.setContext({ executionId, mode: 'partial', scheduleId });
+    logger.setContext({ executionId, mode: 'partial', scheduleId, user: userEmail || 'system' });
     logger.info(`Starting partial scan for schedule: ${scheduleId}`);
 
     // Fetch the specific schedule
@@ -160,7 +161,7 @@ export async function runPartialScan(
     const accounts = await fetchActiveAccounts();
 
     try {
-        const result = await processSchedule(schedule, accounts, triggeredBy);
+        const result = await processSchedule(schedule, accounts, triggeredBy, userEmail);
 
         logger.info('Partial scan completed', result);
 
@@ -190,7 +191,8 @@ export async function runPartialScan(
 async function processSchedule(
     schedule: Schedule,
     accounts: Account[],
-    triggeredBy: 'system' | 'web-ui'
+    triggeredBy: 'system' | 'web-ui',
+    userEmail?: string
 ): Promise<{ started: number; stopped: number; failed: number }> {
     const resources = schedule.resources || [];
     const scheduleStartTime = Date.now();
@@ -352,7 +354,7 @@ async function processSchedule(
             resourcesStopped: stopped,
             resourcesFailed: failed,
             duration,
-        });
+        }, userEmail);
 
         logger.info(`Schedule ${schedule.name} execution recorded: ${started} started, ${stopped} stopped, ${failed} failed`);
     } else {

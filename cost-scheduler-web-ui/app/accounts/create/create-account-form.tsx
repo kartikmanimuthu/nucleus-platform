@@ -81,7 +81,11 @@ const AWS_REGIONS = [
   { id: "eu-central-1", name: "Europe (Frankfurt)" },
 ];
 
-export function CreateAccountForm() {
+export interface CreateAccountFormProps {
+  hubAccountId: string;
+}
+
+export function CreateAccountForm({ hubAccountId }: CreateAccountFormProps) {
   const { data: session } = useSession(); // Get session
   const router = useRouter();
   const [loading, setLoading] = useState(false);
@@ -114,7 +118,7 @@ export function CreateAccountForm() {
 
     try {
       setGenerating(true);
-      const hubAccountId = process.env.NEXT_PUBLIC_HUB_ACCOUNT_ID || "123456789012"; 
+      // hubAccountId is now passed as prop
       
       const response = await fetch(`/api/accounts/template?targetAccountId=${accountId}&accountName=${encodeURIComponent(accountName || '')}&hubAccountId=${hubAccountId}`);
       if (!response.ok) throw new Error("Failed to generate template");
@@ -132,11 +136,10 @@ export function CreateAccountForm() {
 
           if (data.externalId) {
              form.setValue("externalId", data.externalId);
-          
-             // Update suggested Role name to match shortened CloudFormation template
-             const suggestedRoleArn = `arn:aws:iam::${accountId}:role/NucleusAccess-${hubAccountId}`; 
-             if (!form.getValues("roleArn")) {
-               form.setValue("roleArn", suggestedRoleArn);
+           
+             // Use the backend-generated role ARN
+             if (data.suggestedRoleArn && !form.getValues("roleArn")) {
+               form.setValue("roleArn", data.suggestedRoleArn);
              }
           }
     } catch (error) {
@@ -424,7 +427,7 @@ export function CreateAccountForm() {
                     <FormControl>
                         <Input
                         {...field}
-                        placeholder="arn:aws:iam::123456789012:role/NucleusAccess-044656767899"
+                        placeholder={`arn:aws:iam::123456789012:role/NucleusAccess-${hubAccountId || 'HUB_ACCOUNT_ID'}`}
                         />
                     </FormControl>
                     <FormDescription>

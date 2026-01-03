@@ -17,10 +17,11 @@ if (!awsAccountId || !awsRegion) {
 console.log(`Deploying to Account: ${awsAccountId}, Region: ${awsRegion}`);
 
 // Create both stacks in the same app
-new CdkStack(app, 'CostEfficientSchedulerStack', {
+const costEfficientSchedulerStack = new CdkStack(app, 'CostEfficientSchedulerStack', {
   env: { account: awsAccountId, region: awsRegion },
 });
 
 new WebUIStack(app, 'WebUIStack', {
   env: { account: awsAccountId, region: awsRegion },
+  schedulerLambdaArn: costEfficientSchedulerStack.schedulerLambdaFunctionArn,
 });

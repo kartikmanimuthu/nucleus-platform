@@ -57,9 +57,10 @@ const awsRegions = [
 
 interface EditAccountFormProps {
   account: UIAccount;
+  hubAccountId: string;
 }
 
-export function EditAccountForm({ account }: EditAccountFormProps) {
+export function EditAccountForm({ account, hubAccountId }: EditAccountFormProps) {
   const { data: session } = useSession();
   const router = useRouter();
   const { toast } = useToast();
@@ -468,7 +469,7 @@ export function EditAccountForm({ account }: EditAccountFormProps) {
                             onChange={(e) =>
                                 setFormData((prev) => ({ ...prev, roleArn: e.target.value }))
                             }
-                            placeholder="arn:aws:iam::123456789012:role/NucleusAccess-044656767899"
+                            placeholder={`arn:aws:iam::123456789012:role/NucleusAccess-${hubAccountId || 'HUB_ACCOUNT_ID'}`}
                         />
                          <p className="text-[0.8rem] text-muted-foreground">
                             Stack Output: 'RoleArn'

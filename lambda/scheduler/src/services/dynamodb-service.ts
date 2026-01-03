@@ -23,6 +23,7 @@ import { calculateTTL } from '../utils/time-utils.js';
 const APP_TABLE_NAME = process.env.APP_TABLE_NAME || 'cost-optimization-scheduler-app-table';
 const AUDIT_TABLE_NAME = process.env.AUDIT_TABLE_NAME || 'cost-optimization-scheduler-audit-table';
 const AWS_REGION = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || 'ap-south-1';
+const DEFAULT_TENANT_ID = process.env.DEFAULT_TENANT_ID || 'org-default';
 
 // Singleton DynamoDB client
 let docClient: DynamoDBDocumentClient | null = null;
@@ -93,13 +94,12 @@ export async function fetchActiveSchedules(): Promise<Schedule[]> {
 
 /**
  * Fetch a specific schedule by ID
- * Since we don't know the accountId in partial scan mode (from UI trigger),
- * we must use GSI3 to find the record by scheduleId.
+ * Uses GSI3 with proper key condition on both gsi3pk and gsi3sk
  */
-export async function fetchScheduleById(scheduleId: string, tenantId = 'default'): Promise<Schedule | null> {
+export async function fetchScheduleById(scheduleId: string, tenantId = DEFAULT_TENANT_ID): Promise<Schedule | null> {
     const client = getDynamoDBClient();
 
-    // Strategy: Search GSI3 for both active and inactive status
+    // Search both active and inactive status
     const statuses = ['active', 'inactive'];
 
     for (const status of statuses) {
@@ -118,7 +118,7 @@ export async function fetchScheduleById(scheduleId: string, tenantId = 'default'
                 return response.Items[0] as Schedule;
             }
         } catch (error) {
-            logger.error(`Error searching GSI3 for status: ${status}`, error, { scheduleId });
+            logger.error(`Error searching GSI3 for status: ${status}`, error, { scheduleId, tenantId });
         }
     }
 
@@ -224,7 +224,8 @@ export async function createExecutionAuditLog(
         resourcesStopped: number;
         resourcesFailed: number;
         duration: number;
-    }
+    },
+    userEmail?: string
 ): Promise<void> {
     if (!AUDIT_TABLE_NAME) {
         logger.warn('AUDIT_TABLE_NAME not configured, skipping execution audit log');
@@ -269,8 +270,8 @@ export async function createExecutionAuditLog(
         type: 'audit_log',
         eventType: 'scheduler.execution.complete',
         action: 'execution_complete',
-        user: 'system',
-        userType: 'system',
+        user: userEmail || 'system',
+        userType: userEmail ? 'user' : 'system',
         resourceType: 'scheduler',
         resourceId: executionId,
         status: overallStatus,

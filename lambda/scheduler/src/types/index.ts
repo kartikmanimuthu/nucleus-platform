@@ -14,6 +14,8 @@ export interface SchedulerEvent {
     triggeredBy?: 'system' | 'web-ui';
     /** Optional tenant ID for partial scan */
     tenantId?: string;
+    /** User email for audit logging (when triggered by web-ui) */
+    userEmail?: string;
 }
 
 export interface SchedulerResult {

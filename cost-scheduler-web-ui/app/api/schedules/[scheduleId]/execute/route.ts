@@ -3,9 +3,11 @@ import { ScheduleService } from "@/lib/schedule-service";
 import { AuditService } from "@/lib/audit-service";
 import { ScheduleExecutionService } from "@/lib/schedule-execution-service";
 import { LambdaClient, InvokeCommand } from "@aws-sdk/client-lambda";
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "@/lib/auth-options";
 
-// Lambda function name from environment
-const SCHEDULER_LAMBDA_NAME = process.env.SCHEDULER_LAMBDA_NAME || "cost-scheduler-lambda";
+// Lambda ARN from environment
+const SCHEDULER_LAMBDA_ARN = process.env.SCHEDULER_LAMBDA_ARN || "";
 const AWS_REGION = process.env.AWS_REGION || "ap-south-1";
 
 // Initialize Lambda client
@@ -36,6 +38,10 @@ export async function POST(
             );
         }
 
+        // Get user session
+        const session = await getServerSession(authOptions);
+        const userEmail = session?.user?.email;
+
         const executionTime = new Date().toISOString();
         let lambdaResult = null;
         let executionStatus: 'success' | 'failed' | 'partial' = 'success';
@@ -46,12 +52,13 @@ export async function POST(
                 scheduleId: schedule.id,
                 scheduleName: schedule.name,
                 triggeredBy: 'web-ui',
+                userEmail: userEmail || 'unknown-web-user',
             };
 
-            console.log(`[API] Invoking Lambda ${SCHEDULER_LAMBDA_NAME} with payload:`, payload);
+            console.log(`[API] Invoking Lambda ${SCHEDULER_LAMBDA_ARN} with payload:`, payload);
 
             const command = new InvokeCommand({
-                FunctionName: SCHEDULER_LAMBDA_NAME,
+                FunctionName: SCHEDULER_LAMBDA_ARN,
                 Payload: Buffer.from(JSON.stringify(payload)),
                 InvocationType: 'RequestResponse', // Synchronous invocation
             });
@@ -73,7 +80,7 @@ export async function POST(
                 executionStatus = 'failed';
             }
 
-        } catch (lambdaError: any) {
+        } catch (lambdaError) {
             console.error(`[API] Lambda invocation failed:`, lambdaError);
 
             // If Lambda invocation fails (e.g., in local dev), log execution locally
@@ -82,6 +89,7 @@ export async function POST(
 
             // Log execution record for tracking (even on failure)
             try {
+                const errorMessage = lambdaError instanceof Error ? lambdaError.message : String(lambdaError);
                 await ScheduleExecutionService.logExecution({
                     tenantId: 'default',
                     accountId: (schedule.accounts && schedule.accounts[0]) || 'unknown',
@@ -91,7 +99,7 @@ export async function POST(
                     resourcesStarted: 0,
                     resourcesStopped: 0,
                     resourcesFailed: 0,
-                    errorMessage: `Lambda invocation failed: ${lambdaError.message}`,
+                    errorMessage: `Lambda invocation failed: ${errorMessage}`,
                     details: { triggeredBy: 'web-ui', error: String(lambdaError) }
                 });
             } catch (logError) {
@@ -114,7 +122,7 @@ export async function POST(
             resourceName: schedule.name,
             status: executionStatus === 'failed' ? 'error' : 'success',
             details: `Manual execution triggered via Dashboard. Status: ${executionStatus}`,
-            user: "user", // TODO: Get actual user from session
+            user: userEmail || "unknown-web-user",
             source: "web-ui"
         });
 
@@ -128,10 +136,11 @@ export async function POST(
             lambdaResult
         });
 
-    } catch (error: any) {
+    } catch (error) {
         console.error("[API] Error executing schedule:", error);
+        const errorMessage = error instanceof Error ? error.message : "Failed to execute schedule";
         return NextResponse.json(
-            { error: error.message || "Failed to execute schedule" },
+            { error: errorMessage },
             { status: 500 }
         );
     }

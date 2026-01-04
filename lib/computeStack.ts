@@ -13,6 +13,8 @@ import * as ecs from "aws-cdk-lib/aws-ecs";
 import * as elbv2 from "aws-cdk-lib/aws-elasticloadbalancingv2";
 import * as ecr_assets from "aws-cdk-lib/aws-ecr-assets";
 import * as acm from "aws-cdk-lib/aws-certificatemanager";
+import * as cloudfront from "aws-cdk-lib/aws-cloudfront";
+import * as origins from "aws-cdk-lib/aws-cloudfront-origins";
 import * as path from "path";
 import * as crypto from "crypto";
 import { Construct } from "constructs";
@@ -31,6 +33,9 @@ export class ComputeStack extends cdk.Stack {
     public readonly userPool: cognito.UserPool;
     public readonly userPoolClient: cognito.UserPoolClient;
     public readonly identityPool: cognito.CfnIdentityPool;
+    public readonly cloudFrontDistributionId: string;
+    public readonly cloudFrontDomainName: string;
+    public readonly webUiUrl: string;
 
     constructor(scope: Construct, id: string, props: ComputeStackProps) {
         super(scope, id, props);
@@ -464,13 +469,13 @@ export class ComputeStack extends cdk.Stack {
                 logGroup: webUiLogGroup,
                 streamPrefix: 'web-ui',
             }),
-            healthCheck: {
-                command: ['CMD-SHELL', 'curl -f http://localhost:3000/api/health || exit 1'],
-                interval: cdk.Duration.seconds(60),
-                timeout: cdk.Duration.seconds(10),
-                retries: 5,
-                startPeriod: cdk.Duration.seconds(120),
-            },
+            // healthCheck: {
+            //     command: ['CMD-SHELL', 'curl -f http://127.0.0.1:3000/api/health || exit 1'],
+            //     interval: cdk.Duration.seconds(60),
+            //     timeout: cdk.Duration.seconds(10),
+            //     retries: 5,
+            //     startPeriod: cdk.Duration.seconds(120),
+            // },
             environment: {
                 NODE_ENV: 'production',
                 PORT: '3000',
@@ -522,7 +527,7 @@ export class ComputeStack extends cdk.Stack {
         });
 
         // ECS Service
-        const desiredCount = ecsConfig.webUi?.desiredCount || 2;
+        const desiredCount = ecsConfig.webUi?.desiredCount || 0;
         const service = new ecs.FargateService(this, `${appName}-WebUIService`, {
             cluster: ecsCluster,
             taskDefinition: taskDef,
@@ -551,24 +556,32 @@ export class ComputeStack extends cdk.Stack {
         });
         targetGroup.addTarget(service);
 
-        // Listener (HTTP or HTTPS)
-        if (customDomainConfig?.certificateArn && customDomainConfig?.enableCustomDomain) {
-            const certificate = acm.Certificate.fromCertificateArn(this, `${appName}-AlbCertificate`, customDomainConfig.certificateArn);
-            alb.addListener('HttpsListener', {
-                port: 443,
-                protocol: elbv2.ApplicationProtocol.HTTPS,
-                certificates: [certificate],
-                defaultTargetGroups: [targetGroup],
-            });
-            alb.addRedirect({ sourceProtocol: elbv2.ApplicationProtocol.HTTP, targetProtocol: elbv2.ApplicationProtocol.HTTPS });
-            this.webUiLoadBalancerUrl = `https://${alb.loadBalancerDnsName}`;
-        } else {
-            alb.addListener('HttpListener', {
-                port: 80,
-                defaultTargetGroups: [targetGroup],
-            });
-            this.webUiLoadBalancerUrl = `http://${alb.loadBalancerDnsName}`;
-        }
+
+        // ALB Listener HTTP
+        alb.addListener('HttpListener', {
+            port: 80,
+            defaultTargetGroups: [targetGroup],
+        });
+        this.webUiLoadBalancerUrl = `http://${alb.loadBalancerDnsName}`;
+
+        // // Listener (HTTP or HTTPS)
+        // if (customDomainConfig?.certificateArn && customDomainConfig?.enableCustomDomain) {
+        //     const certificate = acm.Certificate.fromCertificateArn(this, `${appName}-AlbCertificate`, customDomainConfig.certificateArn);
+        //     alb.addListener('HttpsListener', {
+        //         port: 443,
+        //         protocol: elbv2.ApplicationProtocol.HTTPS,
+        //         certificates: [certificate],
+        //         defaultTargetGroups: [targetGroup],
+        //     });
+        //     alb.addRedirect({ sourceProtocol: elbv2.ApplicationProtocol.HTTP, targetProtocol: elbv2.ApplicationProtocol.HTTPS });
+        //     this.webUiLoadBalancerUrl = `https://${alb.loadBalancerDnsName}`;
+        // } else {
+        //     alb.addListener('HttpListener', {
+        //         port: 80,
+        //         defaultTargetGroups: [targetGroup],
+        //     });
+        //     this.webUiLoadBalancerUrl = `http://${alb.loadBalancerDnsName}`;
+        // }
 
         // Auto Scaling
         const scaling = service.autoScaleTaskCount({
@@ -577,6 +590,74 @@ export class ComputeStack extends cdk.Stack {
         });
         scaling.scaleOnCpuUtilization('CpuScaling', { targetUtilizationPercent: 70 });
         scaling.scaleOnMemoryUtilization('MemoryScaling', { targetUtilizationPercent: 75 });
+
+        // ============================================================================
+        // CLOUDFRONT DISTRIBUTION
+        // ============================================================================
+
+        // Generate a secret for origin verification (prevents direct ALB access)
+        const originVerifySecret = crypto.randomBytes(32).toString('hex');
+
+        // Create CloudFront distribution with ALB as origin
+        let distribution: cloudfront.Distribution;
+
+        if (customDomainConfig?.enableCustomDomain && customDomainConfig?.domainName && customDomainConfig?.certificateArn) {
+            // Custom domain enabled - create distribution with custom domain
+            const cloudfrontCertificate = acm.Certificate.fromCertificateArn(
+                this,
+                `${appName}-CloudFrontCertificate`,
+                customDomainConfig.certificateArn
+            );
+
+            distribution = new cloudfront.Distribution(this, `${appName}-WebUIDistribution`, {
+                comment: `${appName} Web UI CloudFront Distribution`,
+                domainNames: [customDomainConfig.domainName],
+                certificate: cloudfrontCertificate,
+                defaultBehavior: {
+                    origin: new origins.HttpOrigin(alb.loadBalancerDnsName, {
+                        protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY,
+                        customHeaders: {
+                            'X-Origin-Verify': originVerifySecret,
+                        },
+                    }),
+                    viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+                    allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+                    cachedMethods: cloudfront.CachedMethods.CACHE_GET_HEAD_OPTIONS,
+                    cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED, // Dynamic Next.js content
+                    originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER,
+                },
+                priceClass: cloudfront.PriceClass.PRICE_CLASS_100, // Use only North America and Europe edge locations
+                httpVersion: cloudfront.HttpVersion.HTTP2_AND_3,
+                minimumProtocolVersion: cloudfront.SecurityPolicyProtocol.TLS_V1_2_2021,
+            });
+
+            this.webUiUrl = `https://${customDomainConfig.domainName}`;
+        } else {
+            // No custom domain - use CloudFront default domain
+            distribution = new cloudfront.Distribution(this, `${appName}-WebUIDistribution`, {
+                comment: `${appName} Web UI CloudFront Distribution`,
+                defaultBehavior: {
+                    origin: new origins.HttpOrigin(alb.loadBalancerDnsName, {
+                        protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY,
+                        customHeaders: {
+                            'X-Origin-Verify': originVerifySecret,
+                        },
+                    }),
+                    viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+                    allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+                    cachedMethods: cloudfront.CachedMethods.CACHE_GET_HEAD_OPTIONS,
+                    cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED, // Dynamic Next.js content
+                    originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER,
+                },
+                priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
+                httpVersion: cloudfront.HttpVersion.HTTP2_AND_3,
+            });
+
+            this.webUiUrl = `https://${distribution.distributionDomainName}`;
+        }
+
+        this.cloudFrontDistributionId = distribution.distributionId;
+        this.cloudFrontDomainName = distribution.distributionDomainName;
 
         // ============================================================================
         // STACK OUTPUTS
@@ -595,6 +676,16 @@ export class ComputeStack extends cdk.Stack {
         new cdk.CfnOutput(this, 'WebUIServiceName', { value: service.serviceName });
         new cdk.CfnOutput(this, 'WebUILoadBalancerUrl', { value: this.webUiLoadBalancerUrl });
         new cdk.CfnOutput(this, 'WebUILoadBalancerArn', { value: alb.loadBalancerArn });
+        new cdk.CfnOutput(this, 'CloudFrontDistributionId', { value: distribution.distributionId });
+        new cdk.CfnOutput(this, 'CloudFrontDomainName', { value: distribution.distributionDomainName });
+        new cdk.CfnOutput(this, 'WebUIUrl', {
+            value: this.webUiUrl,
+            description: 'Primary URL for accessing the Web UI (via CloudFront)',
+        });
+        new cdk.CfnOutput(this, 'OriginVerifySecret', {
+            value: originVerifySecret,
+            description: 'Secret header value for origin verification (for ALB configuration)',
+        });
     }
 
     private generateScheduleExpressionIST(interval: number): string {

@@ -4,9 +4,9 @@
   "awsRegion": "us-east-1",
   "customDomain": {
     "enableCustomDomain": false,
-    "domainName": "scheduler.acme.com",
-    "certificateArn": "arn:aws:acm:us-east-1:0000000000000:certificate/40e55aff-447b-4953-b0d9-4655f3c963a4",
-    "fallbackDomainName": "https://d1wep6a714kqli.cloudfront.net"
+    "domainName": "nucleus.acme.com",
+    "certificateArn": "arn:aws:acm:us-east-1:000000000000:certificate/26c8c4ef-0030-4c20-8f86-2dafe94991b1",
+    "fallbackDomainName": "https://d3pets10myhtf5.cloudfront.net"
   },
   "networking": {
     "vpcCidr": "10.0.0.0/16",
@@ -15,17 +15,14 @@
   },
   "ecs": {
     "webUi": {
-      "cpu": 512,
-      "memory": 1024,
-      "desiredCount": 2,
-      "minCapacity": 2,
+      "cpu": 1024,
+      "memory": 2048,
+      "desiredCount": 0,
+      "minCapacity": 1,
       "maxCapacity": 10
     }
   },
-  "subscriptionEmails": [
-    "kartikmanimuthu@smcindiaonline.com",
-    "tech-devops-aaaamnepw4icge4vnpkz54cowu@smcglobalsecu-naz6656.slack.com"
-  ],
+  "subscriptionEmails": [],
   "acknowledged-issue-numbers": [
     34892,
     32775

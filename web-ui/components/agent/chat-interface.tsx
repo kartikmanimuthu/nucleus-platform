@@ -451,8 +451,30 @@ export function ChatInterface({ threadId: initialThreadId }: ChatInterfaceProps)
             </p>
           </div>
         </div>
-        <Button 
-          variant="ghost" 
+        
+        <div className="flex items-center gap-2">
+          {/* AWS Account Selector */}
+          <Select value={selectedAccountId} onValueChange={setSelectedAccountId}>
+            <SelectTrigger className="h-8 text-xs bg-background border-input hover:bg-accent hover:text-accent-foreground focus:ring-0 gap-1 px-3 w-auto min-w-[160px]">
+              <div className="flex items-center gap-1.5">
+                <Cloud className={cn("w-3.5 h-3.5", (selectedAccountId && selectedAccountId !== 'no_account') ? "text-amber-500" : "text-muted-foreground")} />
+                <SelectValue placeholder={accountsLoading ? "Loading..." : "Select AWS Account"} />
+              </div>
+            </SelectTrigger>
+            <SelectContent align="end">
+              <SelectItem value="no_account" className="text-xs text-muted-foreground">
+                No Account (AWS Disabled)
+              </SelectItem>
+              {accounts.map((account) => (
+                <SelectItem key={account.accountId} value={account.accountId} className="text-xs">
+                  {account.name} ({account.accountId})
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          <Button 
+            variant="ghost" 
           size="icon" 
           onClick={handleClear} 
           title="Clear conversation"
@@ -460,6 +482,7 @@ export function ChatInterface({ threadId: initialThreadId }: ChatInterfaceProps)
         >
           <Trash2 className="h-4 w-4" />
         </Button>
+        </div>
       </div>
 
 
@@ -607,28 +630,7 @@ export function ChatInterface({ threadId: initialThreadId }: ChatInterfaceProps)
                 </SelectContent>
               </Select>
 
-              {/* Divider */}
-              <span className="text-muted-foreground/30 hidden sm:inline">|</span>
-              
-              {/* AWS Account Selector */}
-              <Select value={selectedAccountId} onValueChange={setSelectedAccountId}>
-                <SelectTrigger className="h-7 text-xs border-transparent bg-transparent hover:bg-muted/50 focus:ring-0 gap-1 px-2 w-auto min-w-[160px]">
-                  <div className="flex items-center gap-1.5">
-                    <Cloud className={cn("w-3 h-3", (selectedAccountId && selectedAccountId !== 'no_account') ? "text-amber-500" : "text-muted-foreground")} />
-                    <SelectValue placeholder={accountsLoading ? "Loading..." : "Select AWS Account"} />
-                  </div>
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="no_account" className="text-xs text-muted-foreground">
-                    No Account (AWS Disabled)
-                  </SelectItem>
-                  {accounts.map((account) => (
-                    <SelectItem key={account.accountId} value={account.accountId} className="text-xs">
-                      {account.name} ({account.accountId})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+
 
               <span className="text-[10px] text-muted-foreground hidden sm:inline-block">
                 • {14} tools available

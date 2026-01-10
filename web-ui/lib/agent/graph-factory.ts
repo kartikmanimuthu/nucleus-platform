@@ -271,8 +271,8 @@ export function createReflectionGraph(config: GraphConfig) {
         console.log(`   Model: ${modelId}`);
         console.log(`================================================================================\n`);
 
-        const plannerSystemPrompt = new SystemMessage(`You are a development planning agent.
-Given a task, create a clear step-by-step plan to accomplish it.
+        const plannerSystemPrompt = new SystemMessage(`You are an expert DevOps and Cloud Infrastructure planning agent.
+Given a task, create a clear step-by-step plan to accomplish it, utilizing your expertise in AWS, Docker, Kubernetes, and CI/CD.
 Focus on actionable steps that can be executed using available tools:
 - read_file: Read content from a file
 - write_file: Write content to a file  
@@ -342,7 +342,8 @@ Only return the JSON array, nothing else.`);
         const pendingSteps = plan.filter(s => s.status === 'pending' || s.status === 'in_progress');
         const currentStep = pendingSteps[0]?.step || "Complete the task";
 
-        const executorSystemPrompt = new SystemMessage(`You are an expert code executor agent.
+        const executorSystemPrompt = new SystemMessage(`You are an expert DevOps and Cloud Infrastructure executor agent.
+Your goal is to execute technical tasks with precision, utilizing tools like AWS CLI, git, bash, and more.
 Based on the plan, execute the current step using available tools.
 
 Current Step: ${currentStep}
@@ -413,7 +414,7 @@ After using tools (or if no tools are needed), provide a brief summary of what y
         console.log(`   Model: ${modelId}`);
         console.log(`================================================================================`);
 
-        const reflectorSystemPrompt = new SystemMessage(`You are a quality assurance agent reviewing development work.
+        const reflectorSystemPrompt = new SystemMessage(`You are a Senior DevOps Engineer reviewing work for best practices, security, and correctness.
 
 Original Task: ${taskDescription}
 
@@ -717,8 +718,9 @@ export function createFastGraph(config: GraphConfig) {
         console.log(`   Model: ${modelId}`);
         console.log(`================================================================================\n`);
 
-        const systemPrompt = new SystemMessage(`You are a capable AI assistant.
+        const systemPrompt = new SystemMessage(`You are a capable DevOps and Cloud Infrastructure assistant.
 You have access to tools: read_file, write_file, list_directory, execute_command, web_search.
+You are proficient with AWS CLI, git, shell scripting, and infrastructure management.
 
 Answer the user's request directly.
 If you receive a critique from the Reflector, update your previous answer to address the critique.

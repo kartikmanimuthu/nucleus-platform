@@ -38,7 +38,21 @@ FROM public.ecr.aws/docker/library/node:20.9.0-slim AS runner
 WORKDIR /app
 
 # Install curl for healthcheck
-RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+# Install dependencies and tools
+RUN apt-get update && \
+    apt-get install -y \
+    curl \
+    unzip \
+    git \
+    jq \
+    less \
+    groff \
+    grep && \
+    curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" && \
+    unzip awscliv2.zip && \
+    ./aws/install && \
+    rm -rf aws awscliv2.zip && \
+    rm -rf /var/lib/apt/lists/*
 
 # Set environment variables
 ENV PORT=3000 \

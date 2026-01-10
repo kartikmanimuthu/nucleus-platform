@@ -6,7 +6,8 @@ import {
     readFileTool,
     writeFileTool,
     listDirectoryTool,
-    webSearchTool
+    webSearchTool,
+    getAwsCredentialsTool
 } from "./tools";
 import { ToolNode } from "@langchain/langgraph/prebuilt";
 
@@ -238,11 +239,13 @@ function getRecentMessages(messages: BaseMessage[], maxMessages: number = 8): Ba
 export interface GraphConfig {
     model: string;
     autoApprove: boolean;
+    accountId?: string; // Optional: AWS account ID for context
+    accountName?: string; // Optional: AWS account name for display
 }
 
 // Factory function to create a configured reflection graph
 export function createReflectionGraph(config: GraphConfig) {
-    const { model: modelId, autoApprove } = config;
+    const { model: modelId, autoApprove, accountId, accountName } = config;
 
     // --- Model Initialization ---
     const model = new ChatBedrockConverse({
@@ -253,9 +256,15 @@ export function createReflectionGraph(config: GraphConfig) {
         streaming: true,
     });
 
-    const tools = [executeCommandTool, readFileTool, writeFileTool, listDirectoryTool, webSearchTool];
+    // Include AWS credentials tool for account-aware operations
+    const tools = [executeCommandTool, readFileTool, writeFileTool, listDirectoryTool, webSearchTool, getAwsCredentialsTool];
     const modelWithTools = model.bindTools(tools);
     const toolNode = new ToolNode(tools);
+
+    // Build account context string for prompts
+    const accountContext = accountId
+        ? `\n\nIMPORTANT - AWS ACCOUNT CONTEXT:\nYou are operating in the context of AWS account: ${accountName || accountId} (ID: ${accountId}).\nBefore executing any AWS CLI commands, you MUST first call the get_aws_credentials tool with accountId="${accountId}" to obtain temporary credentials.\nThen export those credentials as environment variables before running AWS commands.\nNEVER use the host's default credentials - always use the credentials from get_aws_credentials.`
+        : `\n\nNOTE: No AWS account is selected. If the user asks to perform AWS operations, inform them that they need to select an AWS account first.`;
 
     // --- PLANNER NODE ---
     async function planNode(state: ReflectionState): Promise<Partial<ReflectionState>> {
@@ -279,6 +288,8 @@ Focus on actionable steps that can be executed using available tools:
 - list_directory: List contents of a directory
 - execute_command: Execute shell commands
 - web_search: Search the web for information
+- get_aws_credentials: Get temporary AWS credentials for a specific account (REQUIRED before any AWS CLI commands)
+${accountContext}
 
 Be specific and practical. Each step should be executable.
 
@@ -355,6 +366,8 @@ Available tools:
 - list_directory(path): List contents of a directory
 - execute_command(command): Execute a shell command
 - web_search(query): Search the web for information
+- get_aws_credentials(accountId): Get temporary AWS credentials for a specific account
+${accountContext}
 
 IMPORTANT: You should use tools to accomplish the task if necessary. If the task is a simple question or greeting that doesn't require tools, you may answer directly.
 After using tools (or if no tools are needed), provide a brief summary of what you accomplished or the answer.`);
@@ -694,7 +707,7 @@ ${summaryContent}`;
 
 // --- FAST GRAPH (Reflection Agent Mode) ---
 export function createFastGraph(config: GraphConfig) {
-    const { model: modelId, autoApprove } = config;
+    const { model: modelId, autoApprove, accountId, accountName } = config;
 
     // --- Model Initialization ---
     const model = new ChatBedrockConverse({
@@ -705,9 +718,15 @@ export function createFastGraph(config: GraphConfig) {
         streaming: true,
     });
 
-    const tools = [executeCommandTool, readFileTool, writeFileTool, listDirectoryTool, webSearchTool];
+    // Include AWS credentials tool for account-aware operations
+    const tools = [executeCommandTool, readFileTool, writeFileTool, listDirectoryTool, webSearchTool, getAwsCredentialsTool];
     const modelWithTools = model.bindTools(tools);
     const toolNode = new ToolNode(tools);
+
+    // Build account context string for prompts
+    const accountContext = accountId
+        ? `\n\nIMPORTANT - AWS ACCOUNT CONTEXT:\nYou are operating in the context of AWS account: ${accountName || accountId} (ID: ${accountId}).\nBefore executing any AWS CLI commands, you MUST first call the get_aws_credentials tool with accountId="${accountId}" to obtain temporary credentials.\nThen export those credentials as environment variables before running AWS commands.\nNEVER use the host's default credentials - always use the credentials from get_aws_credentials.`
+        : `\n\nNOTE: No AWS account is selected. If the user asks to perform AWS operations, inform them that they need to select an AWS account first.`;
 
     // --- GENERATOR NODE (Agent) ---
     async function agentNode(state: ReflectionState): Promise<Partial<ReflectionState>> {
@@ -719,8 +738,9 @@ export function createFastGraph(config: GraphConfig) {
         console.log(`================================================================================\n`);
 
         const systemPrompt = new SystemMessage(`You are a capable DevOps and Cloud Infrastructure assistant.
-You have access to tools: read_file, write_file, list_directory, execute_command, web_search.
+You have access to tools: read_file, write_file, list_directory, execute_command, web_search, get_aws_credentials.
 You are proficient with AWS CLI, git, shell scripting, and infrastructure management.
+${accountContext}
 
 Answer the user's request directly.
 If you receive a critique from the Reflector, update your previous answer to address the critique.
@@ -769,7 +789,7 @@ Be concise and effective.`);
         const lastMessage = messages[messages.length - 1];
 
         // If only tool calls, skip reflection (we need an answer to reflect on)
-        if ((lastMessage as AIMessage).tool_calls && (lastMessage as AIMessage).tool_calls?.length > 0) {
+        if ((lastMessage as AIMessage).tool_calls && ((lastMessage as AIMessage).tool_calls?.length ?? 0) > 0) {
             return {};
         }
 

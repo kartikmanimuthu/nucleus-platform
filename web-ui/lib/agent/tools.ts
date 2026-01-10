@@ -5,6 +5,9 @@ import { promisify } from 'util';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 
+// Re-export AWS credentials tool
+export { getAwsCredentialsTool } from './aws-credentials-tool';
+
 const execAsync = promisify(exec);
 
 // --- Execute Command Tool ---

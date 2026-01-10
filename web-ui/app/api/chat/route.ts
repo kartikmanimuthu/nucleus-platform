@@ -25,7 +25,16 @@ interface Message {
 
 export async function POST(req: Request) {
     try {
-        const { messages, threadId: requestThreadId, autoApprove = true, model, mode = 'plan', stream = true } = await req.json();
+        const {
+            messages,
+            threadId: requestThreadId,
+            autoApprove = true,
+            model,
+            mode = 'plan',
+            stream = true,
+            accountId,      // AWS account ID for context
+            accountName     // AWS account name for display
+        } = await req.json();
         const threadId = requestThreadId || Date.now().toString();
 
         // Ensure thread exists in store
@@ -49,12 +58,15 @@ export async function POST(req: Request) {
         console.log(`   Auto-Approve: ${autoApprove}`);
         console.log(`   Model:        ${model || 'Default'}`);
         console.log(`   Mode:         ${mode}`);
+        console.log(`   AWS Account:  ${accountId ? `${accountName || accountId} (${accountId})` : 'None selected'}`);
         console.log(`   Timestamp:    ${new Date().toISOString()}`);
 
         // Create graph with configuration
         const graphConfig = {
             model: model || 'global.anthropic.claude-sonnet-4-5-20250929-v1:0',
-            autoApprove: autoApprove
+            autoApprove: autoApprove,
+            accountId: accountId,       // Pass account context to graph
+            accountName: accountName    // Pass account name for display in prompts
         };
 
         const graph = mode === 'fast'

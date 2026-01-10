@@ -76,6 +76,10 @@ export const generateOnboardingTemplate = (hubAccountId: string, externalId: str
                                 ]
                             }
                         }
+                    ],
+                    ManagedPolicyArns: [
+                        "arn:aws:iam::aws:policy/ReadOnlyAccess",
+                        "arn:aws:iam::aws:policy/AWSBillingReadOnlyAccess"
                     ]
                 }
             }
@@ -146,6 +150,9 @@ Resources:
                   - autoscaling:DescribeAutoScalingGroups
                   - autoscaling:UpdateAutoScalingGroup
                 Resource: '*'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/ReadOnlyAccess
+        - arn:aws:iam::aws:policy/AWSBillingReadOnlyAccess
 Outputs:
   RoleArn:
     Description: The ARN of the cross-account role

@@ -9,7 +9,7 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { 
   Bot, User, Trash2, Loader2, Terminal, Send, 
   Briefcase, Cpu, Check, X, Brain, RefreshCw, 
-  Flag, ListChecks, Sparkles, Settings, Zap
+  Flag, ListChecks, Sparkles, Settings, Zap, Cloud
 } from 'lucide-react';
 // Available modes
 const AGENT_MODES = [
@@ -36,10 +36,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { ClientAccountService } from '@/lib/client-account-service';
+import { UIAccount } from '@/lib/types';
 
 // Available models
 const AVAILABLE_MODELS = [
-  { id: 'moonshot.kimi-k2-thinking', label: 'Kimi K2 Thinking', provider: 'moonshot' },
   { id: 'global.anthropic.claude-sonnet-4-5-20250929-v1:0', label: 'Claude 4.5 Sonnet (Global)', provider: 'amazon' },
   { id: 'us.anthropic.claude-haiku-4-5-20251001-v1:0', label: 'Claude 4.5 Haiku (US)', provider: 'amazon' },
   { id: 'global.amazon.nova-2-lite-v1:0', label: 'Nova 2 Lite (Global)', provider: 'amazon' },
@@ -129,6 +130,34 @@ export function ChatInterface({ threadId: initialThreadId }: ChatInterfaceProps)
   const [selectedModel, setSelectedModel] = useState(AVAILABLE_MODELS[0].id);
   const [agentMode, setAgentMode] = useState('plan');
   const [hasStarted, setHasStarted] = useState(false);
+  
+  // AWS Account selection state
+  const [accounts, setAccounts] = useState<UIAccount[]>([]);
+  const [selectedAccountId, setSelectedAccountId] = useState<string>('');
+  const [accountsLoading, setAccountsLoading] = useState(true);
+
+  // Fetch accounts on mount
+  useEffect(() => {
+    async function fetchAccounts() {
+      try {
+        setAccountsLoading(true);
+        const { accounts: fetchedAccounts } = await ClientAccountService.getAccounts({ 
+          statusFilter: 'active',
+          connectionFilter: 'connected'
+        });
+        setAccounts(fetchedAccounts);
+        console.log('[ChatInterface] Loaded accounts:', fetchedAccounts.length);
+      } catch (error) {
+        console.error('[ChatInterface] Failed to load accounts:', error);
+      } finally {
+        setAccountsLoading(false);
+      }
+    }
+    fetchAccounts();
+  }, []);
+
+  // Get selected account details for API
+  const selectedAccount = accounts.find(a => a.accountId === selectedAccountId);
 
   const { 
     messages, 
@@ -144,6 +173,8 @@ export function ChatInterface({ threadId: initialThreadId }: ChatInterfaceProps)
         autoApprove,
         model: selectedModel,
         mode: agentMode,
+        accountId: selectedAccountId || undefined,
+        accountName: selectedAccount?.name || undefined,
     },
     onResponse: (response: Response) => {
         console.log('[ChatInterface] Received response headers:', response);
@@ -216,6 +247,8 @@ export function ChatInterface({ threadId: initialThreadId }: ChatInterfaceProps)
         autoApprove,
         model: selectedModel,
         mode: agentMode,
+        accountId: (selectedAccountId && selectedAccountId !== 'no_account') ? selectedAccountId : undefined,
+        accountName: selectedAccount?.name || undefined,
       }
     });
   };
@@ -240,6 +273,8 @@ export function ChatInterface({ threadId: initialThreadId }: ChatInterfaceProps)
         autoApprove,
         model: selectedModel,
         mode: agentMode,
+        accountId: (selectedAccountId && selectedAccountId !== 'no_account') ? selectedAccountId : undefined,
+        accountName: selectedAccount?.name || undefined,
       }
     });
   };
@@ -391,7 +426,7 @@ export function ChatInterface({ threadId: initialThreadId }: ChatInterfaceProps)
   // Sample prompts
   const samplePrompts = [
     "List all files in the current directory",
-    "Search the web for LangGraph best practices",
+    "Review the Cost of the AWS Account for the last 3 months and share the key movers and optimization scope",
     "Check my AWS Lambda functions"
   ];
 
@@ -552,9 +587,10 @@ export function ChatInterface({ threadId: initialThreadId }: ChatInterfaceProps)
       <div className="p-4 bg-background border-t">
         <form onSubmit={handleFormSubmit} className="border rounded-xl shadow-sm bg-card overflow-hidden focus-within:ring-1 focus-within:ring-ring transition-all">
           
-          {/* Header: Model Selection & Settings */}
+          {/* Header: Model Selection & AWS Account & Settings */}
           <div className="flex items-center justify-between px-3 py-2 border-b bg-muted/20">
             <div className="flex items-center gap-2">
+              {/* Model Selector */}
               <Select value={selectedModel} onValueChange={setSelectedModel}>
                 <SelectTrigger className="h-7 text-xs border-transparent bg-transparent hover:bg-muted/50 focus:ring-0 gap-1 px-2 w-auto min-w-[180px]">
                   <div className="flex items-center gap-1.5">
@@ -570,8 +606,32 @@ export function ChatInterface({ threadId: initialThreadId }: ChatInterfaceProps)
                   ))}
                 </SelectContent>
               </Select>
+
+              {/* Divider */}
+              <span className="text-muted-foreground/30 hidden sm:inline">|</span>
+              
+              {/* AWS Account Selector */}
+              <Select value={selectedAccountId} onValueChange={setSelectedAccountId}>
+                <SelectTrigger className="h-7 text-xs border-transparent bg-transparent hover:bg-muted/50 focus:ring-0 gap-1 px-2 w-auto min-w-[160px]">
+                  <div className="flex items-center gap-1.5">
+                    <Cloud className={cn("w-3 h-3", (selectedAccountId && selectedAccountId !== 'no_account') ? "text-amber-500" : "text-muted-foreground")} />
+                    <SelectValue placeholder={accountsLoading ? "Loading..." : "Select AWS Account"} />
+                  </div>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="no_account" className="text-xs text-muted-foreground">
+                    No Account (AWS Disabled)
+                  </SelectItem>
+                  {accounts.map((account) => (
+                    <SelectItem key={account.accountId} value={account.accountId} className="text-xs">
+                      {account.name} ({account.accountId})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
               <span className="text-[10px] text-muted-foreground hidden sm:inline-block">
-                • {13} tools available
+                • {14} tools available
               </span>
             </div>
             
